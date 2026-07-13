@@ -133,6 +133,26 @@ node --test tests\browser-globals.test.js tests\budget-core.test.js tests\commer
 
 검증 결과: 전체 21개 테스트 통과, 실패 0개.
 
+### 2026-07-13 추가 완료: ScienceON 검색결과 표 형태 전환
+
+NTIS R&D과제와 같은 밀도로 ScienceON 일반 검색 결과도 표 형태로 전환했다. ScienceON은 논문·특허·보고서·연구자·기관 등 타입이 다양하므로 NTIS의 연구비 열을 그대로 쓰지 않고, 공통 비교에 적합한 열로 구성했다.
+
+- `js/ui.js` — ScienceON `renderResults()`가 카드 루프 대신 `renderScienceONTable()`을 사용한다.
+- 표 열은 `자료명 / 연도 / 저자·기관 / 출처·분류 / 식별자 / 보기`로 구성했다.
+- 논문·보고서·동향은 저자·저널·DOI/CN을, 특허는 출원인·IPC·출원/등록번호를, 연구자는 소속·논문/특허 건수와 심층 프로필 액션을 표시한다.
+- 기존 즐겨찾기, 본문 열기, 연구자 심층 프로필 액션은 표의 `보기` 열로 축약해 유지했다.
+- 클라이언트 정렬과 기관 분포 차트가 카드 DOM 의존 없이 표 행·`STATE.currentItems` 기준으로 동작하도록 보강했다.
+- `tests/browser-globals.test.js` — ScienceON 검색 결과가 테이블 레이아웃으로 유지되도록 회귀 테스트를 추가했다.
+
+추가 검증 명령:
+
+```powershell
+node --check js\ui.js
+node --test tests\browser-globals.test.js tests\budget-core.test.js tests\commerce-score.test.js
+```
+
+검증 결과: 전체 22개 테스트 통과, 실패 0개.
+
 ### 남은 검증 및 고도화
 
 1. 실제 NTIS 응답의 당해연도 연구비 태그가 기관·연도별 응답 변형에서도 모두 매핑되는지 대표 검색어로 통합 검증해야 한다.

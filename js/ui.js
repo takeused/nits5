@@ -2297,6 +2297,7 @@ Respond ONLY with this JSON structure:
         type: getTargetLabel(STATE.currentTarget),
         title: getVal(item,'Title','ScentTitle','AuthorNameKor','OrganKor'),
         authors: getVal(item,'Author'),
+        publisher: getVal(item,'Publisher', 'Applicants', 'AuthorInstKor', 'OrganKor'),
         year: (getVal(item,'Pubyear','PublDate','RegisterDate','ApplDate')||'').substring(0,4),
         url: getVal(item,'ContentURL','FulltextURL','MobileURL'),
         keywords: getVal(item,'Keyword'),
@@ -2304,10 +2305,7 @@ Respond ONLY with this JSON structure:
       }));
 
       // Render items
-      items.forEach((item, idx) => {
-        const card = renderCard(item, idx, query);
-        grid.insertAdjacentHTML('beforeend', card);
-      });
+      grid.insertAdjacentHTML('beforeend', renderScienceONTable(items, query));
 
       // Pagination
       renderPagination(total);
@@ -2315,13 +2313,134 @@ Respond ONLY with this JSON structure:
       setLoading(false);
 
       // Fade in
-      document.querySelectorAll('.result-card').forEach((card, i) => {
+      document.querySelectorAll('.result-card, .scienceon-result-row').forEach((card, i) => {
         card.style.animationDelay = `${i * 0.04}s`;
         card.classList.add('fade-up');
       });
 
       // 인사이트 바 (키워드 클라우드 + 정렬 바)
       renderInsightsBar();
+    }
+
+    function renderScienceONTable(items, query) {
+      const rows = items.map((item, idx) => renderScienceONRow(item, idx, query)).join('');
+      return `
+        <div class="ntis-table-wrap scienceon-table-wrap">
+          <table class="ntis-result-table scienceon-result-table">
+            <thead>
+              <tr>
+                <th style="width:38%;">자료명</th>
+                <th>연도</th>
+                <th>저자·기관</th>
+                <th>출처·분류</th>
+                <th>식별자</th>
+                <th>보기</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <div class="ntis-table-note">출처: ScienceON · 현재 페이지 결과를 표 형태로 표시합니다.</div>
+        </div>`;
+    }
+
+    function renderScienceONRow(item, idx, query) {
+      const target = STATE.currentTarget;
+      const cn = getVal(item, 'CN');
+      const title = getVal(item, 'Title', 'ScentTitle', 'AuthorNameKor', 'OrganKor') || '제목 없음';
+      const url = getVal(item, 'ContentURL', 'FulltextURL', 'MobileURL');
+      const yearRaw = getVal(item, 'Pubyear', 'PublDate', 'RegisterDate', 'ApplDate');
+      const yearDisplay = yearRaw ? yearRaw.substring(0, 4) : '-';
+      const authors = getVal(item, 'Author');
+      const journal = getVal(item, 'JournalName');
+      const publisher = getVal(item, 'Publisher', 'Applicants', 'AuthorInstKor', 'OrganKor');
+      const keyword = getVal(item, 'Keyword');
+      const doi = getVal(item, 'DOI');
+      const dbcode = getVal(item, 'DBCode');
+      const fulltextFlag = getVal(item, 'FulltextFlag');
+      const nation = getVal(item, 'Nation', 'NationCode');
+      const ipc = getVal(item, 'IPC');
+      const patentStatus = getVal(item, 'PatentStatus');
+      const applNum = getVal(item, 'ApplNum');
+      const grantNum = getVal(item, 'GrantNum');
+      const articleCnt = getVal(item, 'ArticleCnt');
+      const patentCnt = getVal(item, 'PatentCnt');
+
+      const hl = (text) => {
+        if (!text || !query) return escHtml(text);
+        const regex = new RegExp(`(${escRegex(query)})`, 'gi');
+        return escHtml(text).replace(regex, '<mark>$1</mark>');
+      };
+      const compactPeople = (value) => {
+        if (!value) return '';
+        const list = value.split(/[;,|]/).map(v => v.trim()).filter(Boolean);
+        return list.slice(0, 3).join(', ') + (list.length > 3 ? ` 외 ${list.length - 3}명` : '');
+      };
+      const compactKeywords = (value) => {
+        if (!value) return '';
+        return value.split(/[;,|]/).map(v => v.trim()).filter(Boolean).slice(0, 3).join(' · ');
+      };
+
+      const primaryMeta = target === 'PATENT'
+        ? (publisher || '-')
+        : target === 'RESEARCHER'
+          ? (publisher || getVal(item, 'AuthorInstEng') || '-')
+          : (compactPeople(authors) || publisher || '-');
+      const sourceParts = target === 'PATENT'
+        ? [nation, ipc ? `IPC ${ipc.substring(0, 18)}` : '', patentStatus].filter(Boolean)
+        : target === 'RESEARCHER'
+          ? [articleCnt ? `논문 ${articleCnt}편` : '', patentCnt ? `특허 ${patentCnt}건` : ''].filter(Boolean)
+          : [journal, dbcode, compactKeywords(keyword)].filter(Boolean);
+      const sourceText = sourceParts.join(' · ') || '-';
+      const identifierParts = target === 'PATENT'
+        ? [applNum ? `출원 ${applNum}` : '', grantNum ? `등록 ${grantNum}` : '', cn].filter(Boolean)
+        : [doi ? `DOI ${doi}` : '', cn].filter(Boolean);
+      const identifierText = identifierParts.join(' · ') || '-';
+      const favId = cn || title;
+      const favPayload = escAttr(JSON.stringify({
+        id: favId,
+        title,
+        url,
+        year: yearDisplay === '-' ? '' : yearDisplay,
+        type: getTargetLabel(target),
+        authors: primaryMeta
+      }));
+      const openAction = url
+        ? `href="${escAttr(url)}" target="_blank" rel="noopener"`
+        : `href="javascript:void(0)" aria-disabled="true"`;
+      const titleClass = url ? 'ntis-result-title' : 'ntis-result-title no-link';
+
+      return `
+        <tr class="scienceon-result-row" data-year="${escAttr(yearDisplay)}" data-title="${escAttr(title)}">
+          <td>
+            <a class="${titleClass}" ${openAction} onclick="event.stopPropagation()">
+              ${idx === 0 ? '<span class="text-xs text-black font-bold mr-1">TOP</span>' : ''}${hl(title)}
+              ${url ? '<iconify-icon icon="solar:arrow-right-up-linear" width="11" style="color:#9ca3af; vertical-align:middle; margin-left:2px;"></iconify-icon>' : ''}
+            </a>
+            <div class="ntis-result-meta">${escHtml(getTargetLabel(target))}${fulltextFlag === 'Y' ? ' · 원문' : ''}</div>
+          </td>
+          <td><span class="ntis-muted">${escHtml(yearDisplay)}</span></td>
+          <td><div class="ntis-cell-ellipsis" title="${escAttr(primaryMeta)}">${escHtml(primaryMeta)}</div></td>
+          <td><div class="ntis-cell-ellipsis" title="${escAttr(sourceText)}">${escHtml(sourceText)}</div></td>
+          <td><div class="ntis-cell-ellipsis" title="${escAttr(identifierText)}">${escHtml(identifierText)}</div></td>
+          <td>
+            <div class="ntis-row-actions">
+              ${target === 'RESEARCHER' ? `<button type="button" class="ntis-row-btn"
+                data-name="${escAttr(title)}"
+                data-subtitle="${escAttr(publisher)}"
+                onclick="event.stopPropagation();showDeepProfile(this.dataset.name,this.dataset.subtitle)">
+                <iconify-icon icon="solar:user-circle-bold-duotone" width="13"></iconify-icon>프로필
+              </button>` : ''}
+              ${url ? `<a class="ntis-row-btn" href="${escAttr(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">
+                <iconify-icon icon="solar:arrow-right-up-bold-duotone" width="13"></iconify-icon>본문
+              </a>` : ''}
+              <button type="button" class="fav-btn ${isFav(favId) ? 'active' : ''}" title="즐겨찾기"
+                data-fav="${favPayload}"
+                onclick="event.stopPropagation();toggleFav(JSON.parse(this.dataset.fav),this)">
+                <iconify-icon icon="solar:bookmark-bold${isFav(favId) ? '' : '-duotone'}" width="15"></iconify-icon>
+              </button>
+            </div>
+          </td>
+        </tr>`;
     }
 
     function renderNTISResults(xml, query, collection) {
@@ -4667,7 +4786,7 @@ ${'='.repeat(64)}
       document.querySelectorAll('.sort-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.sort === criterion);
       });
-      const cards = Array.from(document.querySelectorAll('#resultsGrid .result-card'));
+      const cards = Array.from(document.querySelectorAll('#resultsGrid .result-card, #resultsGrid .scienceon-result-row'));
       if (cards.length === 0) return;
       const sorted = cards.slice().sort((a, b) => {
         if (criterion === 'year-desc') return (parseInt(b.dataset.year) || 0) - (parseInt(a.dataset.year) || 0);
@@ -4701,14 +4820,12 @@ ${'='.repeat(64)}
       const yearLabels = Object.keys(yearFreq).sort();
       const yearData = yearLabels.map(y => yearFreq[y]);
 
-      // 기관 분포 집계 (DOM에서 publisher 텍스트 파싱)
+      // 기관 분포 집계
       const instFreq = {};
-      document.querySelectorAll('#resultsGrid .result-card').forEach(card => {
-        const pubEl = card.querySelector('p.text-sm.text-secondary');
-        if (!pubEl) return;
-        const text = pubEl.textContent || '';
-        const parts = text.split('·');
-        const inst = (parts[1] || parts[0] || '').trim().replace(/\s+/g, ' ').substring(0, 25);
+      STATE.currentItems.forEach(item => {
+        const text = item.publisher || item.authors || '';
+        const parts = text.split(/[·;,|]/);
+        const inst = (parts[0] || '').trim().replace(/\s+/g, ' ').substring(0, 25);
         if (inst && inst.length > 1) instFreq[inst] = (instFreq[inst] || 0) + 1;
       });
       const instEntries = Object.entries(instFreq).sort((a, b) => b[1] - a[1]).slice(0, 8);

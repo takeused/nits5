@@ -98,3 +98,14 @@ test('NTIS project search results use the compact table layout', () => {
   assert.match(css, /\.ntis-result-table/);
   assert.match(css, /\.ntis-result-row/);
 });
+
+test('ScienceON search results use the compact table layout', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'css/style.css'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, 'js/ui.js'), 'utf8');
+
+  assert.match(ui, /function renderScienceONTable/);
+  assert.match(ui, /class="ntis-result-table scienceon-result-table"/);
+  assert.match(ui, /grid\.insertAdjacentHTML\('beforeend', renderScienceONTable\(items, query\)\)/);
+  assert.doesNotMatch(ui, /items\.forEach\(\(item, idx\) => \{\s*const card = renderCard\(item, idx, query\);/);
+  assert.match(css, /\.scienceon-result-row/);
+});

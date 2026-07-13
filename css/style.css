@@ -273,7 +273,8 @@
     }
     .ntis-result-table tr:last-child td { border-bottom: none; }
     .ntis-result-table tbody tr:hover td { background: #fafafa; }
-    .ntis-result-row { transition: background 0.15s; }
+    .ntis-result-row,
+    .scienceon-result-row { transition: background 0.15s; }
     .ntis-result-title {
       display: -webkit-box;
       -webkit-line-clamp: 2;
@@ -287,6 +288,11 @@
       word-break: keep-all;
     }
     .ntis-result-title:hover { text-decoration: underline; }
+    .ntis-result-title.no-link {
+      color: #111;
+      cursor: default;
+      text-decoration: none;
+    }
     .ntis-result-meta {
       margin-top: 0.25rem;
       color: #9ca3af;
