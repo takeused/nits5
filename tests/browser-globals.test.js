@@ -109,3 +109,13 @@ test('ScienceON search results use the compact table layout', () => {
   assert.doesNotMatch(ui, /items\.forEach\(\(item, idx\) => \{\s*const card = renderCard\(item, idx, query\);/);
   assert.match(css, /\.scienceon-result-row/);
 });
+
+test('shared UI visual tokens cover core surfaces and controls', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'css/style.css'), 'utf8');
+
+  assert.match(css, /--brand:\s*#4f46e5/);
+  assert.match(css, /--radius-lg:\s*16px/);
+  assert.match(css, /\.result-card, \.ntis-table-wrap, \.analysis-card/);
+  assert.match(css, /:where\(button, input, select, textarea, a\):focus-visible/);
+  assert.match(css, /html\.dark \.btn-primary/);
+});
