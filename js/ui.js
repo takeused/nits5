@@ -2396,18 +2396,145 @@ Respond ONLY with this JSON structure:
         return;
       }
 
-      items.forEach((item, idx) => {
-        const card = renderNTISCard(item, idx, query, collection);
-        grid.insertAdjacentHTML('beforeend', card);
-      });
+      if (collection === 'project' || collection === 'prjt') {
+        grid.insertAdjacentHTML('beforeend', renderNTISProjectTable(items, query));
+      } else {
+        items.forEach((item, idx) => {
+          const card = renderNTISCard(item, idx, query, collection);
+          grid.insertAdjacentHTML('beforeend', card);
+        });
+      }
 
       renderPagination(total);
       setLoading(false);
 
-      document.querySelectorAll('.result-card').forEach((card, i) => {
+      document.querySelectorAll('.result-card, .ntis-result-row').forEach((card, i) => {
         card.style.animationDelay = `${i * 0.04}s`;
         card.classList.add('fade-up');
       });
+    }
+
+    function renderNTISProjectTable(items, query) {
+      const rows = items.map((item, idx) => renderNTISProjectRow(item, idx, query)).join('');
+      return `
+        <div class="ntis-table-wrap">
+          <table class="ntis-result-table">
+            <thead>
+              <tr>
+                <th style="width:38%;">과제명</th>
+                <th>연간 연구비</th>
+                <th>수행기간</th>
+                <th>수행기관</th>
+                <th>부처·사업</th>
+                <th>보기</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <div class="ntis-table-note">출처: 국가과학기술지식정보서비스(NTIS) · 현재 페이지 결과를 표 형태로 표시합니다.</div>
+        </div>`;
+    }
+
+    function renderNTISProjectRow(item, idx, query) {
+      const stripHL = (text) => (text || '').replace(/<span[^>]*>/gi, '').replace(/<\/span>/gi, '').trim();
+      const gv = (tagName) => {
+        const el = item.getElementsByTagName(tagName)[0];
+        return el ? stripHL(decodeEntities(el.textContent.trim())) : '';
+      };
+      const gnv = (parentTag, childTag) => {
+        const parent = item.getElementsByTagName(parentTag)[0];
+        if (!parent) return '';
+        if (!childTag) return stripHL(decodeEntities(parent.textContent.trim()));
+        const child = parent.getElementsByTagName(childTag)[0];
+        return stripHL(child ? decodeEntities(child.textContent.trim()) : '');
+      };
+      const hl = (text) => {
+        if (!text || !query) return escHtml(text);
+        const regex = new RegExp(`(${escRegex(query)})`, 'gi');
+        return escHtml(text).replace(regex, '<mark>$1</mark>');
+      };
+      const formatYm = (value) => {
+        const s = String(value || '').replace(/\D/g, '');
+        return s.length >= 6 ? `${s.slice(0, 4)}-${s.slice(4, 6)}` : '';
+      };
+      const durationYears = (start, end) => {
+        const s = String(start || '').replace(/\D/g, '');
+        const e = String(end || '').replace(/\D/g, '');
+        if (s.length < 6 || e.length < 6) return 1;
+        const sy = Number(s.slice(0, 4)), sm = Number(s.slice(4, 6));
+        const ey = Number(e.slice(0, 4)), em = Number(e.slice(4, 6));
+        const months = Math.max(1, (ey - sy) * 12 + (em - sm) + 1);
+        return months / 12;
+      };
+      const fmtYears = (years) => {
+        if (!Number.isFinite(years) || years <= 0) return '';
+        return Number.isInteger(years) ? `${years}년` : `${Number(years.toFixed(2))}년`;
+      };
+      const formatAnnualBudget = (raw, years) => {
+        const won = Number(String(raw || '').replace(/[^\d.-]/g, ''));
+        if (!Number.isFinite(won) || won <= 0) return '금액 미상';
+        const annual = won / Math.max(years || 1, 0.01);
+        if (annual >= 100000000) {
+          const eok = annual / 100000000;
+          return `${(eok >= 10 ? eok.toFixed(0) : eok.toFixed(1)).replace(/\.0$/, '')}억 원`;
+        }
+        return `${Math.round(annual / 10000).toLocaleString()}만 원`;
+      };
+
+      const pjtNo = gv('ProjectNumber');
+      const title = gnv('ProjectTitle', 'Korean') || gnv('ProjectTitle', null) || '제목 없음';
+      const manager = gnv('Manager', 'Name');
+      const manageAgency = gnv('ManageAgency', 'Name') || gv('LeadAgency');
+      const researchAgency = gnv('ResearchAgency', 'Name') || manageAgency || '기관 미상';
+      const ministry = gnv('Ministry', 'Name');
+      const business = stripHL(gv('BusinessName'));
+      const start = gnv('ProjectPeriod', 'Start');
+      const end = gnv('ProjectPeriod', 'End');
+      const years = durationYears(start, end);
+      const period = formatYm(start) && formatYm(end)
+        ? `${formatYm(start)}~${formatYm(end)} (${fmtYears(years)})`
+        : '-';
+      const fundsRaw = gv('TotalFunds') || gv('GovernmentFunds');
+      const annualBudget = formatAnnualBudget(fundsRaw, years);
+      const ntisUrl = pjtNo
+        ? `https://www.ntis.go.kr/project/pjtInfo.do?pjtId=${encodeURIComponent(pjtNo)}&pageCode=TH_PJT_PJT_DTL`
+        : 'https://www.ntis.go.kr';
+      const sourceMeta = [manager, pjtNo].filter(Boolean).join(' · ');
+      const ministryBiz = [ministry, business].filter(Boolean).join(' · ') || '-';
+      const favId = pjtNo || title;
+      const favPayload = escAttr(JSON.stringify({ id: favId, title, type: 'R&D과제', url: ntisUrl }));
+
+      return `
+        <tr class="ntis-result-row">
+          <td>
+            <a class="ntis-result-title" href="${ntisUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">
+              ${idx === 0 ? '<span class="text-xs text-black font-bold mr-1">TOP</span>' : ''}${hl(title)}
+              <iconify-icon icon="solar:arrow-right-up-linear" width="11" style="color:#9ca3af; vertical-align:middle; margin-left:2px;"></iconify-icon>
+            </a>
+            ${sourceMeta ? `<div class="ntis-result-meta">${escHtml(sourceMeta)}</div>` : ''}
+          </td>
+          <td><span class="ntis-money">${escHtml(annualBudget)}</span></td>
+          <td><span class="ntis-muted">${escHtml(period)}</span></td>
+          <td><div class="ntis-cell-ellipsis" title="${escAttr(researchAgency)}">${escHtml(researchAgency)}</div></td>
+          <td><div class="ntis-cell-ellipsis" title="${escAttr(ministryBiz)}">${escHtml(ministryBiz)}</div></td>
+          <td>
+            <div class="ntis-row-actions">
+              ${pjtNo ? `<button type="button" class="ntis-row-btn"
+                data-pjt-id="${escAttr(pjtNo)}"
+                data-pjt-title="${escAttr(title)}"
+                onclick="event.stopPropagation(); showRelated(this.dataset.pjtId, this.dataset.pjtTitle)">
+                <iconify-icon icon="solar:link-bold-duotone" width="13"></iconify-icon>연관
+              </button>` : ''}
+              <a class="ntis-row-btn" href="${ntisUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">
+                <iconify-icon icon="solar:arrow-right-up-bold-duotone" width="13"></iconify-icon>상세
+              </a>
+              <button type="button" class="fav-btn ${isFav(favId) ? 'active' : ''}" title="즐겨찾기"
+                onclick="event.stopPropagation();toggleFav(${favPayload},this)">
+                <iconify-icon icon="solar:bookmark-bold${isFav(favId) ? '' : '-duotone'}" width="15"></iconify-icon>
+              </button>
+            </div>
+          </td>
+        </tr>`;
     }
 
     function renderNTISCard(item, idx, query, collection) {
@@ -3986,13 +4113,13 @@ Respond ONLY with:
       } else if (budgetRange.n < 12) {
         warningBanners.push(`ℹ️ 표본 ${budgetRange.n}건 — 12건 미만으로 범위 추정 신뢰도가 다소 제한적입니다.`);
       }
-      // 연구비 분포는 본래 우편향·광폭이라 CV 50~80%는 정상 범위 → 임계값을 높여 오탐 억제.
-      // (중앙값은 분위수 기반이라 편차에 강건하므로 단순 참고용 안내로만 표시)
-      if (budgetRange.cv >= 120) {
-        warningBanners.push(`ℹ️ 변동계수 ${Math.round(budgetRange.cv)}% — 과제 간 연구비 편차가 매우 큽니다(이기종 과제 혼재 가능). 중앙값은 편차에 강건하나, 범위(Min~Max)는 넓게 해석하세요.`);
-      } else if (budgetRange.cv >= 80) {
-        warningBanners.push(`ℹ️ 변동계수 ${Math.round(budgetRange.cv)}% — 연구비 분포 폭이 다소 넓습니다. 범위 해석 시 참고하세요.`);
-      }
+      // 연구비 분포 폭은 결과를 막는 경고가 아니라 대표값 해석을 돕는 보조 진단으로 표시한다.
+      const cvRounded = Math.round(budgetRange.cv);
+      const cvDiagnostic = budgetRange.cv >= 120
+        ? `분포 편차 <strong>매우 큼</strong> · 변동계수 ${cvRounded}% · 이기종 과제 혼재 가능성이 있어 권장 범위와 유사과제를 함께 확인하세요.`
+        : budgetRange.cv >= 80
+          ? `분포 편차 <strong>다소 큼</strong> · 변동계수 ${cvRounded}% · 단일 대표값보다 권장 범위를 함께 해석하세요.`
+          : `분포 편차 <strong>참고 범위</strong> · 변동계수 ${cvRounded}%`;
       if (budgetRange.avgSimilarity !== null && budgetRange.avgSimilarity < 65) {
         warningBanners.push(`⚠️ AI 유사도 평균 ${budgetRange.avgSimilarity}점 — 유사과제 매칭 품질이 낮습니다. 과제명을 구체적으로 입력해 주세요.`);
       }
@@ -4142,9 +4269,9 @@ Respond ONLY with:
             <span class="budget-chip"><span class="dot" style="background:${cf.color};"></span>${cf.label}</span>
             <span class="budget-chip">근거 품질 ${budgetRange.confidenceScore}점</span>
             <span class="budget-chip">표본 ${budgetRange.n}건</span>
-            <span class="budget-chip">CV ${Math.round(budgetRange.cv)}%</span>
             ${simChip}
           </div>
+          <div class="budget-hero-diagnostic">${cvDiagnostic}</div>
         </div>
 
         ${ladderHtml}

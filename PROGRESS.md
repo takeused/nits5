@@ -98,6 +98,41 @@ node --test tests\budget-core.test.js tests\commerce-score.test.js tests\browser
 
 검증 결과: 전체 19개 테스트 통과, 실패 0개.
 
+### 2026-07-13 추가 완료: 적정 연구비 결과 화면 톤 조정
+
+사용자 화면 캡처 기준으로 결과 요약 영역의 검정 배경과 큰 숫자, `CV 145%` 강조 칩이 상단의 밝은 조건 선택 카드와 시각적으로 충돌했다. 결과 해석의 무게중심은 유지하되 화면 톤을 상단과 맞췄다.
+
+- `css/style.css` — `budget-hero`를 검정 그라데이션 카드에서 흰색 요약 패널로 변경하고, 글자 크기·패딩·배지 톤을 상단 카드와 유사하게 낮췄다.
+- `js/ui.js` — 변동계수(CV)를 큰 칩과 주황 경고 배너에서 제거하고, 요약 패널 하단의 작은 `분포 진단` 문장으로 표시한다.
+- `tests/browser-globals.test.js` — 예산 결과 요약이 어두운 그라데이션으로 회귀하지 않고 CV 칩을 다시 만들지 않도록 회귀 테스트를 추가했다.
+
+추가 검증 명령:
+
+```powershell
+node --check js\ui.js
+node --test tests\browser-globals.test.js tests\budget-core.test.js tests\commerce-score.test.js
+```
+
+검증 결과: 전체 20개 테스트 통과, 실패 0개.
+
+### 2026-07-13 추가 완료: NTIS 검색결과 표 형태 전환
+
+사용자 화면 캡처 기준으로 NTIS R&D과제 일반 검색 결과가 큰 카드로 표시되어 한 화면에 보이는 과제 수가 너무 적었다. 적정 연구비 분석의 대표 유사과제 표처럼 조밀하게 비교할 수 있도록 R&D과제 결과를 표 형태로 전환했다.
+
+- `js/ui.js` — NTIS `project/prjt` 검색 결과는 `renderNTISProjectTable()`로 분기해 `과제명 / 연간 연구비 / 수행기간 / 수행기관 / 부처·사업 / 보기` 열로 표시한다.
+- `css/style.css` — `ntis-result-table` 계열 스타일과 다크 모드 대응을 추가했다.
+- 기존 `연관콘텐츠`, `NTIS 상세`, `즐겨찾기` 액션은 표의 `보기` 열로 축약해 유지했다.
+- `tests/browser-globals.test.js` — NTIS 과제 검색 결과가 테이블 레이아웃으로 유지되도록 회귀 테스트를 추가했다.
+
+추가 검증 명령:
+
+```powershell
+node --check js\ui.js
+node --test tests\browser-globals.test.js tests\budget-core.test.js tests\commerce-score.test.js
+```
+
+검증 결과: 전체 21개 테스트 통과, 실패 0개.
+
 ### 남은 검증 및 고도화
 
 1. 실제 NTIS 응답의 당해연도 연구비 태그가 기관·연도별 응답 변형에서도 모두 매핑되는지 대표 검색어로 통합 검증해야 한다.

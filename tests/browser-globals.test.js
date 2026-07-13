@@ -76,3 +76,25 @@ test('budget core loads before UI in the browser entrypoint', () => {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   assert.ok(html.indexOf('js/budget-core.js') < html.indexOf('js/ui.js'));
 });
+
+test('budget result summary uses the light card treatment', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'css/style.css'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, 'js/ui.js'), 'utf8');
+
+  const heroRule = css.match(/\.budget-hero\s*\{[^}]+\}/)?.[0] || '';
+  assert.match(heroRule, /background:\s*#fff/);
+  assert.doesNotMatch(heroRule, /linear-gradient\(135deg,\s*#111/);
+  assert.doesNotMatch(ui, /<span class="budget-chip">CV/);
+  assert.match(ui, /budget-hero-diagnostic/);
+});
+
+test('NTIS project search results use the compact table layout', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'css/style.css'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, 'js/ui.js'), 'utf8');
+
+  assert.match(ui, /function renderNTISProjectTable/);
+  assert.match(ui, /class="ntis-result-table"/);
+  assert.match(ui, /collection === 'project' \|\| collection === 'prjt'/);
+  assert.match(css, /\.ntis-result-table/);
+  assert.match(css, /\.ntis-result-row/);
+});
