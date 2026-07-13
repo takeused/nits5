@@ -20,7 +20,7 @@
       return `HTTP ${fallbackStatus}`;
     }
 
-    async function doSearch(page = 1) {
+    async function doSearch(page = 1, _isRetry = false) {
       const query = document.getElementById('searchInput').value.trim();
       if (!query) {
         showToast('검색어를 입력해주세요', 'warning');
@@ -101,12 +101,16 @@
 
           switch (errCode) {
             case 'E4103':
-              if (STATE.refreshToken) {
-                await refreshAccessToken();
-                doSearch(page);
-                return;
+              // 토큰 만료: 갱신에 성공했을 때만 1회 재시도. 갱신 실패이거나 이미 재시도한
+              // 상태면 중단한다 (무한 재귀 → 요청 폭주 → E4290 방지).
+              if (STATE.refreshToken && !_isRetry) {
+                const ok = await refreshAccessToken();
+                if (ok) { doSearch(page, true); return; }
               }
-              showToast('Access Token이 만료됐습니다 (E4103)', 'error');
+              showToast('Access Token이 만료됐습니다. 잠시 후 다시 시도해 주세요 (E4103)', 'error');
+              break;
+            case 'E4290':
+              showToast('요청 한도를 초과했습니다. 30초쯤 후 다시 시도해 주세요 (E4290)', 'warning');
               break;
             default:
               showToast(`${errMsg} (${errCode})`, 'error');

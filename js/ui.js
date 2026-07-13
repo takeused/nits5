@@ -2246,9 +2246,12 @@ Respond ONLY with this JSON structure:
           scheduleTokenRefresh();   // ⏰ 다음 갱신 재예약
           updateTokenExpireDisplay();
           showToast('🔄 Access Token이 자동 갱신되었습니다', 'success');
+          return true;
         }
+        return false;   // 갱신 응답에 access_token 없음 → 실패로 처리
       } catch (e) {
         showToast('⚠️ 토큰 자동 갱신 실패. API 설정에서 새 토큰을 입력하세요', 'error');
+        return false;
       }
     }
 

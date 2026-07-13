@@ -112,8 +112,9 @@
           <div class="search-icon-wrap w-full">
             <iconify-icon icon="solar:magnifer-bold" class="search-icon" width="20"></iconify-icon>
             <input id="searchInput" type="text" placeholder="검색어를 입력하세요" class="search-input w-full"
-              onkeydown="if(event.key==='Enter') doSearch()" onfocus="showHistory()"
-              onblur="setTimeout(hideHistory,200)" autocomplete="off" aria-label="검색어 입력">
+              onkeydown="if(event.key==='Enter') doSearch()" onfocus="this.removeAttribute('readonly');showHistory()"
+              onblur="setTimeout(hideHistory,200)" autocomplete="off" readonly
+              name="rnd-search-query" data-lpignore="true" data-1p-ignore aria-label="검색어 입력">
           </div>
           <!-- 검색 히스토리 드롭다운 -->
           <div id="historyDropdown" class="hidden">
