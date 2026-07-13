@@ -8,13 +8,57 @@
   const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, value));
   const count = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0;
   const logScale = (value, fullScale) => clamp(Math.log10(count(value) + 1) / Math.log10(fullScale + 1));
-  const metricUsable = metric => !metric || metric.status === 'ok' || metric.status === 'no_result';
+  const metricUsable = metric => Boolean(metric && (metric.status === 'ok' || metric.status === 'no_result'));
   const median = values => {
     const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
     if (!sorted.length) return null;
     const mid = Math.floor(sorted.length / 2);
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   };
+
+  const patentIntensityFor = counts => {
+    const papers = count(counts?.arti);
+    const patents = count(counts?.patent);
+    const logPaper = Math.log10(papers + 1);
+    return logPaper > 0 ? Math.log10(patents + 1) / logPaper : NaN;
+  };
+
+  function buildPeerContext(results = [], minPapers = 5) {
+    const intensities = results
+      .filter(result => count(result?.counts?.arti) >= minPapers)
+      .filter(result => metricUsable(result?.metrics?.arti) && metricUsable(result?.metrics?.patent))
+      .map(result => patentIntensityFor(result.counts))
+      .filter(Number.isFinite);
+    return {
+      medianPatentIntensity: intensities.length >= 3 ? median(intensities) : null,
+      peerCount: intensities.length,
+    };
+  }
+
+  function summarizeTrendMetrics(yearly = [], prior = 20) {
+    const items = Array.isArray(yearly) ? yearly : [];
+    const values = items.map(item => count(item?.value));
+    const errorYears = items.filter(item => item?.status === 'error').length;
+    const knownYears = items.length - errorYears;
+    const half = Math.floor(values.length / 2);
+    const prev = values.slice(0, half).reduce((sum, value) => sum + value, 0);
+    const recent = values.slice(half).reduce((sum, value) => sum + value, 0);
+    const total = prev + recent;
+    const status = errorYears === items.length && items.length > 0
+      ? 'error'
+      : errorYears > 0
+        ? 'partial'
+        : total === 0
+          ? 'empty'
+          : 'ok';
+    const growthRate = status === 'ok'
+      ? Math.round((recent - prev) / (prev + prior) * 100)
+      : 0;
+    const rawGrowthRate = status === 'ok' && prev > 0
+      ? Math.round((recent - prev) / prev * 100)
+      : null;
+    return { yearlyCounts: values, prev, recent, growthRate, rawGrowthRate, status, knownYears, errorYears, prior };
+  }
 
   function researchMomentum(trend = {}) {
     const growthRate = Number.isFinite(Number(trend.growthRate)) ? Number(trend.growthRate) : 0;
@@ -48,8 +92,9 @@
     const logPaper = Math.log10(papers + 1);
     const logPatent = Math.log10(patents + 1);
     const patentIntensity = logPaper > 0 ? logPatent / logPaper : 0;
-    const directGapSignal = (logPaper + logPatent) > 0 ? logPaper / (logPaper + logPatent) : 0;
-    const peerIntensity = Number.isFinite(Number(peerContext.medianPatentIntensity))
+    // 논문과 특허의 로그 규모가 같으면 공백 0, 특허 강도가 낮을수록 1에 접근한다.
+    const directGapSignal = logPaper > 0 ? clamp(1 - patentIntensity) : 0;
+    const peerIntensity = Number(peerContext.peerCount) >= 3 && Number.isFinite(Number(peerContext.medianPatentIntensity))
       ? Number(peerContext.medianPatentIntensity)
       : null;
     // 후보군 내부 중앙값과 비교해 상대적으로 특허 전환이 낮은지를 보정한다.
@@ -70,7 +115,7 @@
     );
 
     const ntisSignal = logScale(ntis, 1000);
-    const reportSignal = reports > 0 ? 1 : 0;
+    const reportSignal = logScale(reports, 50);
     // 특허가 일부 존재하는 것은 전환 가능성의 증거다. 특허 과다는 공백도에서 별도로 감점된다.
     const patentTranslationSignal = patents > 0 ? logScale(patents, 100) : 0;
     const externalSignals = ['patentFamily', 'market', 'trl']
@@ -80,17 +125,27 @@
       ? externalSignals.reduce((sum, item) => sum + clamp(Number(item.score) / 100), 0) / externalSignals.length
       : 0;
 
-    const commercializationEvidence = 100 * (
-      0.45 * ntisSignal +
-      0.20 * reportSignal +
-      0.25 * patentTranslationSignal +
-      0.10 * externalSignal
-    );
+    const evidenceParts = [
+      { weight: 0.45, score: ntisSignal, available: metricUsable(metrics.ntis) },
+      { weight: 0.20, score: reportSignal, available: metricUsable(metrics.report) },
+      { weight: 0.25, score: patentTranslationSignal, available: metricUsable(metrics.patent) },
+      { weight: 0.10, score: externalSignal, available: externalSignals.length > 0 },
+    ];
+    const availableEvidence = evidenceParts.filter(part => part.available);
+    const evidenceWeight = availableEvidence.reduce((sum, part) => sum + part.weight, 0);
+    // 미연결 데이터는 0점 근거가 아니라 미관측 범위다. 점수와 커버리지를 분리한다.
+    const commercializationEvidence = evidenceWeight > 0
+      ? 100 * availableEvidence.reduce((sum, part) => sum + part.weight * part.score, 0) / evidenceWeight
+      : 0;
+    const evidenceCoverage = evidenceWeight * 100;
 
     const coreMetricNames = ['arti', 'patent', 'ntis', 'report'];
     const metricQuality = coreMetricNames.filter(name => metricUsable(metrics[name])).length / coreMetricNames.length;
     const queryComparable = queryMeta.comparable === false ? 0.35 : 1;
-    const queryPenalty = queryMeta.relaxed ? 0.85 : 1;
+    const relaxationDepth = Math.max(0, Number(queryMeta.relaxationDepth) || 0);
+    const queryPenalty = queryMeta.relaxed
+      ? clamp(0.92 - 0.08 * Math.max(1, relaxationDepth), 0.60, 0.84)
+      : 1;
     const paperReliability = clamp(papers / 20);
     const trendVolume = count(trend.recent) + count(trend.prev);
     const trendReliability = trend.status === 'ok' ? clamp(trendVolume / 20) : 0.25;
@@ -115,6 +170,7 @@
       rankingScore: Number(rankingScore.toFixed(2)),
       opportunity: Number(opportunity.toFixed(1)),
       evidence: Number(commercializationEvidence.toFixed(1)),
+      evidenceCoverage: Number(evidenceCoverage.toFixed(0)),
       confidence: Number(confidence.toFixed(1)),
       components: {
         paperFoundation: Number((paperFoundation * 100).toFixed(1)),
@@ -129,6 +185,7 @@
         reportSignal: Number((reportSignal * 100).toFixed(1)),
         patentTranslationSignal: Number((patentTranslationSignal * 100).toFixed(1)),
         externalSignal: Number((externalSignal * 100).toFixed(1)),
+        queryPenalty: Number((queryPenalty * 100).toFixed(1)),
       },
       exploratory,
       confidenceGate: confidence >= 60,
@@ -136,5 +193,14 @@
     };
   }
 
-  return { clamp, median, researchMomentum, computeIndicators };
+  return {
+    clamp,
+    median,
+    metricUsable,
+    patentIntensityFor,
+    buildPeerContext,
+    summarizeTrendMetrics,
+    researchMomentum,
+    computeIndicators,
+  };
 });

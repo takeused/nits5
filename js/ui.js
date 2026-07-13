@@ -1114,6 +1114,20 @@ Respond ONLY with this JSON structure:
         </div>`;
     }
 
+    async function mapWithConcurrency(items, limit, mapper) {
+      const source = Array.isArray(items) ? items : [];
+      const results = new Array(source.length);
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(Math.max(1, limit), source.length) }, async () => {
+        while (cursor < source.length) {
+          const index = cursor++;
+          results[index] = await mapper(source[index], index);
+        }
+      });
+      await Promise.all(workers);
+      return results;
+    }
+
     // 메인 진입점 — 버튼 onclick
     async function runTechCommerceAnalysis() {
       // 검색 모드에서도 현재 쿼리를 STATE에서 폴백
@@ -1191,9 +1205,10 @@ Respond ONLY with this JSON structure:
         analysisSection.querySelector('.analysis-body').insertAdjacentHTML('beforeend',
           `<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px;">${candidateChips}</div>`);
 
-        const rawResults = await Promise.all(
-          candidates.map(c => fetchKeywordAnalysisData(c.keyword, c.patent_query || null, c.search_terms || []))
-        );
+        // 후보별 검색식은 순차 검증하되, 후보 간 동시 요청은 2개로 제한해
+        // ScienceON/NTIS rate limit 오류가 점수 왜곡으로 이어지는 것을 줄인다.
+        const rawResults = await mapWithConcurrency(candidates, 2,
+          c => fetchKeywordAnalysisData(c.keyword, c.patent_query || null, c.search_terms || []));
         // AI 분석 이유 결합
         rawResults.forEach((r, i) => {
           r.aiReason     = candidates[i]?.gap_reason    || '';
@@ -1262,25 +1277,30 @@ Respond ONLY with this JSON structure:
       // 논문·특허는 항상 같은 canonical 검색어 쌍으로 조회한다.
       let selectedPair = null;
       let bestPair = null;
+      let bestAttempt = null;
       for (const query of variants) {
         const [arti, patent] = await Promise.all([
           fetchScienceON('ARTI', query, 3),
           fetchScienceON('PATENT', query, 5),
         ]);
         const pair = { query, arti, patent };
-        if (!bestPair || arti.metric.value > bestPair.arti.metric.value) bestPair = pair;
-        if (arti.metric.status !== 'error' && arti.metric.value >= 20) {
+        if (!bestAttempt || arti.metric.value > bestAttempt.arti.metric.value) bestAttempt = pair;
+        const comparablePair = arti.metric.status !== 'error' && patent.metric.status !== 'error';
+        if (comparablePair && (!bestPair || arti.metric.value > bestPair.arti.metric.value)) bestPair = pair;
+        if (comparablePair && arti.metric.value >= 20) {
           selectedPair = pair;
           break;
         }
       }
-      selectedPair = selectedPair || bestPair || {
+      selectedPair = selectedPair || bestPair || bestAttempt || {
         query: keyword,
         arti: { xml: null, metric: metric(0, 'error', { error: 'no query result' }) },
         patent: { xml: null, metric: metric(0, 'error', { error: 'no query result' }) },
       };
 
       const canonicalQuery = selectedPair.query;
+      const canonicalIndex = Math.max(0, variants.indexOf(canonicalQuery));
+      const pairComparable = selectedPair.arti.metric.status !== 'error' && selectedPair.patent.metric.status !== 'error';
       const fetchNTIS = async () => {
         const proxyBase = getProxyBase();
         if (proxyBase === null) return { xml: null, metric: metric(0, 'error', { error: 'proxy unavailable' }) };
@@ -1319,8 +1339,9 @@ Respond ONLY with this JSON structure:
           requestedQuery: keyword,
           canonicalQuery,
           relaxed: canonicalQuery !== keyword.trim(),
-          comparable: true,
-          variantsTried: variants.slice(0, variants.indexOf(canonicalQuery) + 1),
+          relaxationDepth: canonicalIndex,
+          comparable: pairComparable,
+          variantsTried: variants.slice(0, canonicalIndex + 1),
           querySet: variants,
           retrievedAt: new Date().toISOString(),
         },
@@ -1370,19 +1391,12 @@ Respond ONLY with this JSON structure:
         const kw = typeof candidate === 'string' ? candidate : candidate.query;
         const label = typeof candidate === 'string' ? candidate : candidate.keyword;
         const yearly = await Promise.all(years.map(year => fetchYearCount(kw, year)));
-        const prev = yearly[0].value + yearly[1].value;
-        const recent = yearly[2].value + yearly[3].value;
-        // 작은 모수의 폭증을 완화하는 수축 성장률. 이전 기간에 20건을 더한 뒤 비교한다.
-        const growthRate = Math.round((recent - prev) / (prev + 20) * 100);
+        const summary = CommerceScoring.summarizeTrendMetrics(yearly, 20);
         return {
           keyword: label,
           query: kw,
           years,
-          yearlyCounts: yearly.map(item => item.value),
-          recent,
-          prev,
-          growthRate,
-          status: yearly.some(item => item.status === 'error') ? 'error' : 'ok',
+          ...summary,
         };
       }));
     }
@@ -1401,13 +1415,7 @@ Respond ONLY with this JSON structure:
 
     function selectTop3WithDiversity(results, trendSignals = []) {
       const sigMap = Object.fromEntries(trendSignals.map(s => [s.keyword, s]));
-      const patentIntensities = results.map(r => {
-        const papers = Math.max(0, Number(r.counts?.arti) || 0);
-        const patents = Math.max(0, Number(r.counts?.patent) || 0);
-        const paperLog = Math.log10(papers + 1);
-        return paperLog > 0 ? Math.log10(patents + 1) / paperLog : NaN;
-      });
-      const peerContext = { medianPatentIntensity: CommerceScoring.median(patentIntensities) };
+      const peerContext = CommerceScoring.buildPeerContext(results);
       results.forEach(r => {
         r.trendSignal = sigMap[r.keyword] || null;
         r.indicators = calcCommerceIndicators(r, r.trendSignal, peerContext);
@@ -1450,33 +1458,8 @@ Respond ONLY with this JSON structure:
           selected.push(candidate);
         }
       }
-      if (selected.length < 3) {
-        const backfill = eliminated
-          .filter(r => r.indicators?.eligible)
-          .sort((a, b) => b.score - a.score);
-        while (selected.length < 3 && backfill.length > 0) {
-          const r = backfill.shift();
-          r.rank = selected.length + 1;
-          r.eliminatedReason = undefined;
-          selected.push(r);
-          eliminated.splice(eliminated.indexOf(r), 1);
-        }
-      }
-      // 최종 폴백: 모든 후보가 논문 < 20건인 극단적 경우
-      // — score > 0인 후보가 없으면 빈 결과를 반환해 "유망 분야 없음" 메시지 처리
-      if (selected.length === 0 && eliminated.length > 0) {
-        const withScore = eliminated.filter(r => r.score > 0).sort((a, b) => b.score - a.score);
-        if (withScore.length > 0) {
-          while (selected.length < 3 && withScore.length > 0) {
-            const r = withScore.shift();
-            r.rank = selected.length + 1;
-            r.eliminatedReason = undefined;
-            selected.push(r);
-            eliminated.splice(eliminated.indexOf(r), 1);
-          }
-        }
-        // score > 0인 후보도 없으면 selected를 비워두어 호출부에서 에러 처리
-      }
+      // 다양성 기준으로 제외한 후보를 Top 3 숫자를 채우기 위해 다시 넣지 않는다.
+      // 서로 다른 유효 후보가 부족하면 Top 1/2만 반환하는 것이 더 정직하다.
       return { top3: selected, eliminated, exploratory };
     }
 
@@ -1527,27 +1510,22 @@ Respond ONLY with this JSON structure:
       const displayScore = value => Number.isFinite(Number(value)) ? Number(value).toFixed(1) : '0.0';
 
       // ── 포지션 레이블 ─────────────────────────────────────────────
-      const getStatus = (arti, patent, trendSignal = null) => {
+      const getStatus = result => {
+        const { arti, patent } = result.counts;
+        const trendSignal = result.trendSignal;
+        const gapSignal = Number(result.indicators?.components?.gapSignal) || 0;
+        const patentIntensity = Number(result.indicators?.components?.patentIntensity) || 0;
+        const hasCoreError = ['arti', 'patent'].some(name => result.metrics?.[name]?.status === 'error');
+        if (hasCoreError) return { icon: '❓', label: '핵심 데이터 오류', color: '#9ca3af', bg: '#f9fafb' };
         if (arti === 0) return { icon: '❓', label: '데이터 없음', color: '#9ca3af', bg: '#f9fafb' };
         // 특허 0건: 진짜 공백인지 검색 실패인지 불확실 → 수동 검증 권고
         if (patent === 0) return { icon: '⚠️', label: '특허 0건 (검증 필요)', color: '#b45309', bg: '#fffbeb' };
-        const isHighPaper  = arti   >= 200;
-        const isHighPatent = patent >= 50;
         const isGrowing    = (trendSignal?.growthRate ?? 0) > 20;
-        if (isHighPaper && !isHighPatent) {
-          if (isGrowing) return { icon: '🎯', label: '급성장 공백 후보', color: '#1d4ed8', bg: '#eff6ff' };
-          return               { icon: '🔎', label: '연구↑ 특허↓ 검토 후보', color: '#1d4ed8', bg: '#dbeafe' };
-        }
-        if (!isHighPaper && !isHighPatent) {
-          if (isGrowing) return { icon: '🌱', label: '신흥 분야 (↑성장중)', color: '#15803d', bg: '#f0fdf4' };
-          return               { icon: '🌱', label: '신흥 분야 (early)', color: '#059669', bg: '#dcfce7' };
-        }
-        if (isHighPaper && isHighPatent) {
-          const gap = 1 - patent / arti;
-          if (gap >= 0.7) return { icon: '📈', label: '성장기 (틈새 가능)', color: '#b45309', bg: '#fefce8' };
-          return               { icon: '🔴', label: '특허 밀집', color: '#dc2626', bg: '#fef2f2' };
-        }
-        return { icon: '⚠️', label: '특허 우세 (추가 검토)', color: '#dc2626', bg: '#fef2f2' };
+        if (gapSignal >= 60 && isGrowing) return { icon: '🎯', label: '급성장 공백 후보', color: '#1d4ed8', bg: '#eff6ff' };
+        if (gapSignal >= 60) return { icon: '🔎', label: '공백 신호 강함', color: '#1d4ed8', bg: '#dbeafe' };
+        if (gapSignal >= 35) return { icon: '📈', label: '공백 신호 관찰', color: '#b45309', bg: '#fefce8' };
+        if (patentIntensity >= 100) return { icon: '🔴', label: 'IP 밀집·우세', color: '#dc2626', bg: '#fef2f2' };
+        return { icon: '🌱', label: isGrowing ? '성장 탐색 후보' : '균형·성숙 후보', color: '#059669', bg: '#ecfdf5' };
       };
 
       const rankMedal  = r => r === 1 ? '🥇' : r === 2 ? '🥈' : '🥉';
@@ -1560,9 +1538,10 @@ Respond ONLY with this JSON structure:
       // ── 순위 카드 HTML ────────────────────────────────────────────
       const rankCards = top3.map(r => {
         const { arti, patent, ntis } = r.counts;
-        const st    = getStatus(arti, patent, r.trendSignal);
+        const st    = getStatus(r);
         const sc    = displayScore(r.indicators?.opportunity);
         const evidence = displayScore(r.indicators?.evidence);
+        const evidenceCoverage = displayScore(r.indicators?.evidenceCoverage);
         const confidence = displayScore(r.indicators?.confidence);
         const col   = rankColors[r.rank] || rankColors[3];
         const kw    = r.keyword.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -1611,7 +1590,7 @@ Respond ONLY with this JSON structure:
               ${scoreBar}
               <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px;">
                 <div style="background:white;border:1px solid #e5e7eb;border-radius:6px;padding:6px;text-align:center;"><p style="font-size:9px;color:#6b7280;margin:0;">공백 매력도</p><strong style="font-size:12px;color:#1d4ed8;">${sc}</strong></div>
-                <div style="background:white;border:1px solid #e5e7eb;border-radius:6px;padding:6px;text-align:center;"><p style="font-size:9px;color:#6b7280;margin:0;">전환·실행 근거</p><strong style="font-size:12px;color:#7c3aed;">${evidence}</strong></div>
+                <div style="background:white;border:1px solid #e5e7eb;border-radius:6px;padding:6px;text-align:center;"><p style="font-size:9px;color:#6b7280;margin:0;">전환·실행 근거</p><strong style="font-size:12px;color:#7c3aed;">${evidence}</strong><small style="display:block;font-size:8px;color:#98a2b3;">범위 ${evidenceCoverage}%</small></div>
                 <div style="background:white;border:1px solid #e5e7eb;border-radius:6px;padding:6px;text-align:center;"><p style="font-size:9px;color:#6b7280;margin:0;">데이터 신뢰도</p><strong style="font-size:12px;color:#059669;">${confidence}</strong></div>
               </div>
               ${r.queryMeta?.relaxed ? `<p style="font-size:9px;color:#b45309;margin:7px 0 0;">검색 완화 적용: “${escHtml(r.queryMeta.canonicalQuery)}” — 논문·특허 동일 범위 비교</p>` : ''}
@@ -1704,11 +1683,11 @@ Respond ONLY with this JSON structure:
               </div>
               <div style="background:white;border:1px solid #e5e7eb;border-left:4px solid #059669;border-radius:6px;padding:12px 14px;">
                 <p style="font-weight:700;color:#059669;margin:0 0 4px 0;">Step 3 — 3개 지표 산출</p>
-                <p style="margin:0;color:#6b7280;">핵심 데이터 오류와 신뢰도 60점 미만 후보는 정식 순위에서 보류합니다. 통과 후보는 <strong>공백 매력도</strong>(연구 기반 35% + 후보군 대비 IP 공백 40% + 연구 모멘텀·안정성 25%), <strong>전환·실행 근거</strong>(NTIS·보고서·특허 전환 신호), <strong>데이터 신뢰도</strong>(API 상태·검색 범위·표본량·추세 완결성)로 분리합니다. 논문 5~19건의 성장 후보는 초기 탐색 후보로 별도 표시합니다.</p>
+                <p style="margin:0;color:#6b7280;">핵심 데이터 오류와 신뢰도 60점 미만 후보는 정식 순위에서 보류합니다. 통과 후보는 <strong>공백 매력도</strong>(연구 기반 35% + 로그 특허강도 기반 IP 공백 40% + 연구 모멘텀·안정성 25%), <strong>전환·실행 근거</strong>(NTIS·보고서·특허 전환 신호), <strong>데이터 신뢰도</strong>(API 상태·검색 완화 깊이·관측량·추세 완결성)로 분리합니다. 후보군 상대 비교는 핵심 데이터가 정상이고 논문 5건 이상인 후보가 3개 이상일 때만 적용합니다.</p>
               </div>
               <div style="background:white;border:1px solid #e5e7eb;border-left:4px solid #f59e0b;border-radius:6px;padding:12px 14px;">
                 <p style="font-weight:700;color:#b45309;margin:0 0 4px 0;">Step 4 — 최종 순위 선정 (Top 3)</p>
-                <p style="margin:0;color:#6b7280;">공백 매력도에 데이터 신뢰도를 직접 반영한 내부 우선순위로 정렬하고, 같은 테마·유사 키워드는 한 개만 우선 선정합니다. 전환·실행 근거는 순위와 분리해 후속 검토 방향을 제시합니다. 표시값은 사업화 성공확률이 아닙니다.</p>
+                <p style="margin:0;color:#6b7280;">공백 매력도에 데이터 신뢰도를 직접 반영한 내부 우선순위로 정렬하고, 같은 테마·유사 키워드는 한 개만 선정합니다. 서로 다른 유효 후보가 3개보다 적으면 유사 후보를 다시 채우지 않고 Top 1~2만 표시합니다. 전환·실행 근거는 순위와 분리하며, 표시값은 사업화 성공확률이 아닙니다.</p>
               </div>
             </div>
 
@@ -1716,7 +1695,7 @@ Respond ONLY with this JSON structure:
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:12px;">
               <div style="background:white;border:1px solid #dbeafe;border-radius:8px;padding:10px 12px;">
                 <p style="font-size:11px;font-weight:700;color:#1d4ed8;margin:0 0 3px 0;">🔎 강한 공백 후보</p>
-                <p style="font-size:11px;color:#6b7280;margin:0;">논문 200건+, 특허 50건 미만 — 특허성·시장성 후속검토 우선 후보</p>
+                <p style="font-size:11px;color:#6b7280;margin:0;">논문 대비 로그 특허강도와 후보군 기준이 모두 낮고 데이터 신뢰도가 확보된 후속검토 후보</p>
               </div>
               <div style="background:white;border:1px solid #dcfce7;border-radius:8px;padding:10px 12px;">
                 <p style="font-size:11px;font-weight:700;color:#15803d;margin:0 0 3px 0;">🌱 신흥 분야</p>
@@ -1728,7 +1707,7 @@ Respond ONLY with this JSON structure:
               </div>
               <div style="background:white;border:1px solid #fee2e2;border-radius:8px;padding:10px 12px;">
                 <p style="font-size:11px;font-weight:700;color:#dc2626;margin:0 0 3px 0;">🔴 레드오션</p>
-                <p style="font-size:11px;color:#6b7280;margin:0;">특허 장벽이 높아 진입이 어렵거나 성숙 경쟁 중인 분야 — 파괴적 혁신 전략 필요</p>
+                <p style="font-size:11px;color:#6b7280;margin:0;">논문 대비 IP 색인 강도가 높아 공백 신호가 약한 분야 — 실제 권리 장벽은 FTO로 별도 확인</p>
               </div>
             </div>
 
@@ -1850,7 +1829,7 @@ Respond ONLY with this JSON structure:
           <h3 style="font-size:13px;font-weight:700;color:#111;margin:0 0 16px 0;">📋 "${escHtml(keyword)}" 상세 분석 리포트</h3>
           ${indicators ? `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px;">
             <div style="background:#eff6ff;padding:10px;border-radius:8px;text-align:center;"><small>공백 매력도</small><strong style="display:block;color:#1d4ed8;">${indicators.opportunity.toFixed(1)}</strong></div>
-            <div style="background:#f5f3ff;padding:10px;border-radius:8px;text-align:center;"><small>전환·실행 근거</small><strong style="display:block;color:#7c3aed;">${indicators.evidence.toFixed(1)}</strong></div>
+            <div style="background:#f5f3ff;padding:10px;border-radius:8px;text-align:center;"><small>전환·실행 근거</small><strong style="display:block;color:#7c3aed;">${indicators.evidence.toFixed(1)}</strong><small style="display:block;color:#98a2b3;">근거 범위 ${indicators.evidenceCoverage}%</small></div>
             <div style="background:#ecfdf5;padding:10px;border-radius:8px;text-align:center;"><small>데이터 신뢰도</small><strong style="display:block;color:#059669;">${indicators.confidence.toFixed(1)}</strong></div>
           </div>` : ''}
           ${queryMeta ? `<p style="font-size:10px;color:#6b7280;margin:0 0 12px;">비교 검색어: “${escHtml(queryMeta.canonicalQuery)}” · 논문/특허 동일 범위${queryMeta.relaxed ? ' · 원 후보에서 검색 완화됨' : ''}</p>` : ''}
@@ -1966,39 +1945,39 @@ Respond ONLY with this JSON structure:
       const { arti, patent, report, att, ntis } = counts;
       const today = new Date().toLocaleDateString('ko-KR', { year:'numeric', month:'2-digit', day:'2-digit' });
 
-      // ── 연구–IP 공백 지수 (로그스케일) ──────────────────────────────
-      // raw 비율(특허÷논문)은 색인 규모 비대칭·키워드 상세도에 매우 민감하고,
-      // 특허>논문이면 gapRatio가 음수→0%로 하드 클램프돼 "특허 조금 많음"과
-      // "수십 배 많음"이 똑같이 레드오션으로 뭉개진다.
-      // → 건수를 로그로 압축한 공백도 = log(논문)/(log(논문)+log(특허))
-      //   (calcCommerceScore의 공백도 정의와 동일). 편차·비대칭에 강건한 연속 지표.
+      // ── 연구–IP 공백 지수 ───────────────────────────────────────────
+      // 순위 카드에서 계산한 동일 지표를 우선 재사용한다. 단독 리포트 경로에서는
+      // 로그 특허강도(로그 특허/로그 논문)의 결핍값을 사용한다.
       const logArti     = Math.log10(arti + 1);
       const logPatent   = Math.log10(patent + 1);
-      const gapScore    = (logArti + logPatent) > 0 ? logArti / (logArti + logPatent) : 0;
-      const gapPct      = gapScore * 100;                          // 0~100 (높을수록 연구 대비 특허 공백)
+      const patentIntensity = logArti > 0 ? logPatent / logArti : 0;
+      const directGapPct = Math.max(0, Math.min(100, (1 - patentIntensity) * 100));
+      const gapPct = Number.isFinite(Number(analysisMeta?.indicators?.components?.gapSignal))
+        ? Number(analysisMeta.indicators.components.gapSignal)
+        : (patent === 0 && arti > 0 ? Math.min(directGapPct, 70) : directGapPct);
       const patentRatio = arti > 0 ? (patent / arti * 100) : 0;    // 참고용 raw 비율(표시 전용)
       const zeroPatent  = patent === 0 && arti > 0;
 
-      // ── 상태 레이블 (로그스케일 gapPct 기준) ─────────────────────────
+      // ── 상태 레이블 (순위와 동일한 gapPct 기준) ─────────────────────
       let statusBg, statusText, statusIcon, finalInsight;
       if (zeroPatent) {
         statusBg = '#eff6ff'; statusText = '특허 0건 (검증 필요)'; statusIcon = '⚠️';
         finalInsight = `검색된 특허가 0건입니다. 진짜 IP 공백인지 검색어·분류 차이인지 확인하고, 유효 특허·패밀리·FTO를 추가 검토하세요.`;
-      } else if (gapPct >= 70) {
+      } else if (gapPct >= 60) {
         statusBg = '#eff6ff'; statusText = '공백 신호 강함'; statusIcon = '🔎';
-        finalInsight = `연구성과가 특허를 크게 앞섭니다. 후속 특허성·시장성 검토 우선순위가 높은 후보입니다. (ScienceON 특허 색인이 논문보다 커 상세 키워드일수록 공백이 과대평가될 수 있으니 참고용으로 보세요.)`;
-      } else if (gapPct >= 58) {
+        finalInsight = `연구성과 대비 특허 색인 강도가 낮습니다. 검색 범위·유효권리·특허 패밀리를 확인한 뒤 특허성·시장성 검토 여부를 결정하세요.`;
+      } else if (gapPct >= 35) {
         statusBg = '#f0fdf4'; statusText = '공백 신호 있음'; statusIcon = '🌱';
         finalInsight = `연구–특허 전환 격차가 관찰됩니다. 응용별 특허 분포와 실제 수요를 추가 확인할 가치가 있습니다.`;
-      } else if (gapPct >= 45) {
+      } else if (patentIntensity <= 1.10) {
         statusBg = '#fefce8'; statusText = '연구·IP 균형'; statusIcon = '⚖️';
         finalInsight = `연구와 특허가 로그 기준 비슷한 수준입니다. 세부 응용 영역에서 틈새 기회를 탐색하세요.`;
-      } else if (gapPct >= 32) {
+      } else if (patentIntensity <= 1.40) {
         statusBg = '#fff7ed'; statusText = 'IP 우세 (성숙기)'; statusIcon = '📈';
         finalInsight = `특허가 연구를 앞서는 성숙 분야입니다. 틈새 응용 특허 전략이 필요합니다.`;
       } else {
-        statusBg = '#fef2f2'; statusText = '레드오션 (특허 대폭 우세)'; statusIcon = '🔴';
-        finalInsight = `특허가 연구를 크게 앞섭니다. 파괴적 혁신 또는 인접 틈새 시장 공략이 필요합니다.`;
+        statusBg = '#fef2f2'; statusText = 'IP 밀집·우세'; statusIcon = '🔴';
+        finalInsight = `특허 색인 강도가 높아 공백 신호는 약합니다. 실제 진입장벽은 유효권리와 FTO 분석으로 별도 확인해야 합니다.`;
       }
 
       // ── 비고 텍스트 생성 ─────────────────────────────────────────
@@ -2014,10 +1993,10 @@ Respond ONLY with this JSON structure:
         .filter(Boolean);
       const uniqueApplicants = [...new Set(patentApplicants)].slice(0, 3);
       const patentNote = patent === 0       ? '검색 특허 0건 — 검색·패밀리 검증 필요'
-                       : patent < 10        ? '초기 특허 단계, 선점 기회 존재'
+                       : patent < 10        ? '특허 표본 적음 — 특허성·권리범위 검토 필요'
                        : uniqueApplicants.length > 0
                            ? uniqueApplicants.join(', ') + ' 등 중심'
-                           : patent < arti / 20 ? 'IP 선점 기회 존재' : '경쟁 특허 다수';
+                           : patent < arti / 20 ? '논문 대비 특허 색인 적음' : '경쟁 특허 다수';
 
       const reportNote     = report === 0  ? '보고서 없음' : '정부 R&D 보고서';
       const attNote        = att === 0     ? '전무 — 정보 공백 존재' : '동향 정보 존재';
@@ -2058,52 +2037,49 @@ Respond ONLY with this JSON structure:
         </li>`;
       }).join('');
 
-      // ── 사업화 시나리오 생성 ──────────────────────────────────────
-      // Scenario A: IP 선점 (항상)
-      // Scenario B: NTIS 연계 (ntis > 0인 경우 풍부하게)
-      // Scenario C: 플랫폼/솔루션 (patent holder 분석 기반)
+      // ── 후속 검증 경로 생성 ───────────────────────────────────────
       const itDominated = uniqueApplicants.some(a =>
         /IBM|Samsung|LG|Qualcomm|Intel|Microsoft|Google|Apple|Huawei|Sony|NEC|Fujitsu|HITACHI/i.test(a));
 
       const scenarioA = {
-        icon: '💡', stars: '★★★★★',
-        title: `${escHtml(query)} 핵심 원천 특허 출원`,
-        basis: `논문 ${arti.toLocaleString()}건의 연구 성과 기반, 특허화율 ${arti > 0 ? Math.round(patentRatio).toLocaleString() + '%' : '-'}`,
-        target: '대학·출연연 연구팀, 기술사업화 전담 조직',
-        ip: '핵심 방법론·알고리즘 특허, 측정·평가 방법론 특허',
+        icon: '💡', coverage: '필수',
+        title: `${escHtml(query)} 특허성·선행기술 검토`,
+        basis: `논문 ${arti.toLocaleString()}건·특허 ${patent.toLocaleString()}건의 색인 규모 비교, 특허/논문 비율 ${arti > 0 ? Math.round(patentRatio).toLocaleString() + '%' : '-'}`,
+        target: '해당 기술 연구팀, 지식재산·기술사업화 담당 조직',
+        ip: '청구항 중복, 신규성·진보성, 유효 특허와 패밀리 범위 검증',
       };
       const scenarioB = {
-        icon: '🏗️', stars: ntis > 100 ? '★★★★☆' : '★★★☆☆',
-        title: `NTIS ${ntis > 0 ? ntis.toLocaleString() + '건' : ''} 과제 연계 R&D 기획`,
-        basis: `정부 투자 ${ntis.toLocaleString()}건 과제 수행기관 네트워크 활용`,
-        target: '과기부·행안부·소방청 등 재난·안전 주관 부처, 출연연',
-        ip: '정부 과제 기반 공공 데이터 활용 특허, 표준화 방법론',
+        icon: '🏗️', coverage: ntis > 0 ? '근거 있음' : '근거 제한',
+        title: `NTIS 과제·수행기관 연계 검토`,
+        basis: ntis > 0 ? `동일 검색어 기준 NTIS 과제 ${ntis.toLocaleString()}건` : 'NTIS 결과가 없거나 조회되지 않아 추가 검색 필요',
+        target: '관련 과제 수행기관·수요기관·기술이전 담당자',
+        ip: '기존 과제 성과·중복성·후속 실증 수요 확인',
       };
       const scenarioC = {
-        icon: '🌐', stars: '★★★★☆',
+        icon: '🌐', coverage: uniqueApplicants.length > 0 ? '표본 근거' : '가설',
         title: itDominated
-          ? `IT 특허 편중 공백 — 물리적·응용 영역 솔루션 개발`
-          : `${escHtml(query)} 기반 플랫폼 솔루션 개발`,
+          ? `상위 특허 표본의 응용영역 편중 여부 검증`
+          : `${escHtml(query)} 응용·플랫폼 가설 검증`,
         basis: itDominated
-          ? `현 특허 보유자(${uniqueApplicants.slice(0,2).join(', ')})가 IT 영역에 편중 → 물리 인프라·도시·현장 응용 분야 공백`
-          : `기술 표준화 및 플랫폼 선점 기회 존재`,
-        target: '지자체, 스마트시티 사업자, 건설·인프라 컨설팅사',
-        ip: '응용 시스템 특허, 데이터 수집·시각화 방법론 특허',
+          ? `상위 검색결과에서 ${uniqueApplicants.slice(0,2).join(', ')} 등이 확인됨 — 전체 출원인 분포와 IPC/CPC로 재검증 필요`
+          : `상위 특허 표본만으로 응용 공백을 확정할 수 없어 수요·분류 기반 검증 필요`,
+        target: '잠재 수요기업·현장 사용자·제품기획 담당자',
+        ip: '응용별 문제–해결 적합성, 구현 차별성, 데이터·표준 의존성 검증',
       };
 
       // ── 즉시 실행 액션 플랜 ───────────────────────────────────────
       const actionPlan = [
         { period: '1~3개월 (단기)', icon: '⚡', items: [
-          `${query} 관련 국내 핵심 방법론 특허 출원 준비 — 기존 논문(${arti.toLocaleString()}건) 분석 기반`,
+          `${query} 관련 선행특허·비특허문헌 검색식 확장 및 유효권리 검토`,
           `주요 특허 보유자(${uniqueApplicants.length > 0 ? uniqueApplicants.slice(0,2).join(', ') : '해외 기업'}) FTO(Freedom to Operate) 조사 수행`,
         ]},
         { period: '3~6개월 (중기)', icon: '📋', items: [
-          ntis > 0 ? `NTIS 과제 수행기관 ${ntis.toLocaleString()}건 분석 → 핵심 기관 협력 네트워크 구축` : '정부 부처 R&D 과제 기획 제안서 작성',
-          '관련 부처(과기부·행안부·국토부 등) R&D 과제 기획 제안',
+          ntis > 0 ? `NTIS 과제 ${ntis.toLocaleString()}건의 수행기관·성과·중복성 분석` : '유사어·분류코드로 NTIS 검색 범위를 재검증',
+          '잠재 수요기관 인터뷰로 해결 문제와 구매·도입 조건 확인',
         ]},
         { period: '6개월+ (장기)', icon: '🎯', items: [
-          '학술-산업-정부 연계 연구 컨소시엄 구성',
-          '국제 표준화 기구(ISO, IEC 등) 연계 표준 특허 확보 추진',
+          '특허성·시장성·TRL 근거가 확보된 후보만 실증·사업화 과제로 전환',
+          '필요 시 FTO·표준·규제 검토를 포함한 단계별 투자 의사결정',
         ]},
       ];
 
@@ -2200,8 +2176,8 @@ Respond ONLY with this JSON structure:
             </div>
             ${uniqueApplicants.length > 0 ? `
             <div style="background:#fefce8;border-left:4px solid #eab308;padding:10px 14px;border-radius:6px;margin-bottom:28px;font-size:11px;color:#713f12;">
-              💡 <strong>인사이트:</strong> 특허 보유 주체가 <strong>${uniqueApplicants.slice(0,2).join(', ')} 등</strong>에 편중되어 있습니다.
-              ${itDominated ? '표본상 IT 영역 편중이 보입니다. 물리 인프라·현장 응용 영역은 별도 특허검색으로 검증해야 합니다.' : '세부 응용별 특허 분포를 추가 검토할 수 있습니다.'}
+              💡 <strong>상위 표본:</strong> 검색 상위 결과에서 <strong>${uniqueApplicants.slice(0,2).join(', ')} 등</strong>이 확인됩니다.
+              ${itDominated ? 'IT 기업이 포함되어 있으나 편중 여부는 전체 출원인·IPC/CPC 분포로 검증해야 합니다.' : '전체 출원인 분포를 의미하지 않으므로 세부 응용별 추가 검색이 필요합니다.'}
             </div>` : `<div style="margin-bottom:28px;"></div>`}
 
             <!-- 주요 논문 TOP 3 -->
@@ -2210,14 +2186,14 @@ Respond ONLY with this JSON structure:
               : `<p style="font-size:12px;color:#9ca3af;margin-bottom:28px;">논문 데이터가 없거나 조회되지 않았습니다.</p>`}
 
             <!-- 후속 검토 시나리오 -->
-            <h3 style="font-size:13px;font-weight:700;color:#111;margin:0 0 12px 0;">🧭 후속 사업화 검토 시나리오</h3>
+            <h3 style="font-size:13px;font-weight:700;color:#111;margin:0 0 12px 0;">🧭 후속 검증 경로</h3>
             <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:28px;">
               ${[scenarioA, scenarioB, scenarioC].map((s, i) => `
               <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;background:white;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
                   <span style="font-size:16px;">${s.icon}</span>
                   <span style="font-size:12px;font-weight:700;color:#111;">Scenario ${String.fromCharCode(65+i)}: ${s.title}</span>
-                  <span style="margin-left:auto;font-size:12px;color:#eab308;">${s.stars}</span>
+                  <span style="margin-left:auto;font-size:10px;color:#667085;background:#f2f4f7;border-radius:999px;padding:2px 7px;">${s.coverage}</span>
                 </div>
                 <div style="display:grid;grid-template-columns:70px 1fr;gap:4px 8px;font-size:11px;">
                   <span style="color:#9ca3af;font-weight:600;">근거</span><span style="color:#374151;">${s.basis}</span>
@@ -2228,7 +2204,7 @@ Respond ONLY with this JSON structure:
             </div>
 
             <!-- 즉시 실행 액션 플랜 -->
-            <h3 style="font-size:13px;font-weight:700;color:#111;margin:0 0 12px 0;">📋 즉시 실행 액션 플랜</h3>
+            <h3 style="font-size:13px;font-weight:700;color:#111;margin:0 0 12px 0;">📋 단계별 검증 계획</h3>
             <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:28px;">
               ${actionPlan.map(phase => `
               <div style="border-left:3px solid #e5e7eb;padding-left:14px;">
@@ -2355,17 +2331,31 @@ Respond ONLY with this JSON structure:
     }
 
     function renderScienceONTable(items, query) {
-      const rows = items.map((item, idx) => renderScienceONRow(item, idx, query)).join('');
+      const target = STATE.currentTarget;
+      const hasValue = (value) => String(value || '').trim().length > 0;
+      const flags = {
+        year: items.some(item => hasValue(getVal(item, 'Pubyear', 'PublDate', 'RegisterDate', 'ApplDate'))),
+        people: items.some(item => hasValue(getVal(item, 'Author', 'Publisher', 'Applicants', 'AuthorInstKor', 'OrganKor'))),
+        source: items.some(item => target === 'PATENT'
+          ? hasValue(getVal(item, 'Nation', 'NationCode', 'IPC', 'PatentStatus'))
+          : target === 'RESEARCHER'
+            ? hasValue(getVal(item, 'ArticleCnt', 'PatentCnt'))
+            : hasValue(getVal(item, 'JournalName', 'DBCode', 'Keyword'))),
+        identifier: items.some(item => target === 'PATENT'
+          ? hasValue(getVal(item, 'ApplNum', 'GrantNum', 'CN'))
+          : hasValue(getVal(item, 'DOI', 'CN'))),
+      };
+      const rows = items.map((item, idx) => renderScienceONRow(item, idx, query, flags)).join('');
       return `
         <div class="ntis-table-wrap scienceon-table-wrap">
           <table class="ntis-result-table scienceon-result-table">
             <thead>
               <tr>
                 <th style="width:38%;">자료명</th>
-                <th>연도</th>
-                <th>저자·기관</th>
-                <th>출처·분류</th>
-                <th>식별자</th>
+                ${flags.year ? '<th>연도</th>' : ''}
+                ${flags.people ? '<th>저자·기관</th>' : ''}
+                ${flags.source ? '<th>출처·분류</th>' : ''}
+                ${flags.identifier ? '<th>식별자</th>' : ''}
                 <th>보기</th>
               </tr>
             </thead>
@@ -2375,7 +2365,7 @@ Respond ONLY with this JSON structure:
         </div>`;
     }
 
-    function renderScienceONRow(item, idx, query) {
+    function renderScienceONRow(item, idx, query, flags = { year: true, people: true, source: true, identifier: true }) {
       const target = STATE.currentTarget;
       const cn = getVal(item, 'CN');
       const title = getVal(item, 'Title', 'ScentTitle', 'AuthorNameKor', 'OrganKor') || '제목 없음';
@@ -2450,14 +2440,14 @@ Respond ONLY with this JSON structure:
             </a>
             <div class="ntis-result-meta">${escHtml(getTargetLabel(target))}${fulltextFlag === 'Y' ? ' · 원문' : ''}</div>
           </td>
-          <td><span class="ntis-muted">${escHtml(yearDisplay)}</span></td>
-          <td><div class="ntis-cell-ellipsis" title="${escAttr(primaryMeta)}">${escHtml(primaryMeta)}</div></td>
-          <td><div class="ntis-cell-ellipsis" title="${escAttr(sourceText)}">${escHtml(sourceText)}</div></td>
-          <td>
+          ${flags.year ? `<td><span class="ntis-muted">${escHtml(yearDisplay)}</span></td>` : ''}
+          ${flags.people ? `<td><div class="ntis-cell-ellipsis" title="${escAttr(primaryMeta)}">${escHtml(primaryMeta)}</div></td>` : ''}
+          ${flags.source ? `<td><div class="ntis-cell-ellipsis" title="${escAttr(sourceText)}">${escHtml(sourceText)}</div></td>` : ''}
+          ${flags.identifier ? `<td>
             <button type="button" class="identifier-copy ntis-cell-ellipsis" title="클릭하여 식별자 전체 복사"
               aria-label="식별자 복사" data-identifier="${escAttr(identifierText)}"
               onclick="event.stopPropagation();copyIdentifierValue(this.dataset.identifier,this)">${escHtml(identifierText)}</button>
-          </td>
+          </td>` : ''}
           <td>
             <div class="ntis-row-actions">
               ${target === 'RESEARCHER' ? `<button type="button" class="ntis-row-btn"

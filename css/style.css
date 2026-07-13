@@ -1006,6 +1006,167 @@
     .identifier-copy.is-copied { color: var(--success); text-decoration: none; }
     .card-identifier-copy { max-width: 220px; font-size: .75rem; color: var(--tertiary); }
     .ntis-project-id { max-width: 220px; }
+    .home-search-controls { gap: .5rem; margin-top: .1rem; }
+    .home-search-controls #searchBtn { margin: 0; white-space: nowrap; }
+    @media (max-width: 560px) {
+      .home-search-controls { gap: .4rem; }
+      .home-search-controls #searchBtn { flex-basis: 100%; justify-content: center; }
+    }
+
+    /* Softer Apple-style graphite accents: reserve pure black for text only. */
+    :root {
+      --accent: #273444;
+      --graphite: #344054;
+      --graphite-hover: #475467;
+      --silver-ink: #667085;
+    }
+    .brand-mark { background: var(--graphite); }
+    .brand-wordmark { color: var(--accent); }
+    .btn-primary,
+    .btn-analysis,
+    .db-btn.active,
+    .budget-ladder-chip.is-active,
+    .budget-year-btn.is-active {
+      background: var(--graphite) !important;
+      border-color: var(--graphite) !important;
+    }
+    .btn-primary:hover,
+    .btn-analysis:hover,
+    .budget-ladder-chip.is-active:hover,
+    .budget-year-btn.is-active:hover {
+      background: var(--graphite-hover) !important;
+      border-color: var(--graphite-hover) !important;
+    }
+    .analysis-header { background: linear-gradient(135deg, #344054 0%, #475467 100%); }
+    .budget-kpi-card.primary { background: linear-gradient(135deg, #344054 0%, #475467 100%); }
+    .budget-score-fill { background: linear-gradient(90deg, #344054, #98a2b3); }
+    .budget-step.active { background: var(--graphite); }
+    #runBtn { background: var(--graphite) !important; }
+    .search-mode .db-btn.active {
+      color: var(--graphite) !important;
+      border-bottom-color: var(--graphite);
+    }
+    html.dark .brand-mark { background: #475467; }
+    html.dark .btn-primary,
+    html.dark .btn-analysis { background: #d0d5dd !important; border-color: #d0d5dd !important; color: #1d2939; }
+
+    /* Trend analysis result surface: compact, shared with the rest of the app. */
+    .trend-analysis-card {
+      width: min(900px, 100%);
+      margin: 0 auto;
+      overflow: hidden;
+    }
+    .trend-analysis-card .analysis-header {
+      padding: 1rem 1.35rem;
+      min-height: 72px;
+    }
+    .trend-analysis-card .analysis-header p { letter-spacing: -.01em; }
+    .trend-analysis-body {
+      padding: 1.25rem 1.35rem;
+      background: var(--surface);
+    }
+    .trend-analysis-loading {
+      min-height: 180px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: .7rem;
+      padding: 1.5rem;
+      background: var(--surface);
+      text-align: center;
+    }
+    .trend-analysis-loading .spinner { margin: 0 auto; }
+    .trend-analysis-error {
+      width: min(900px, 100%);
+      margin: 0 auto;
+      padding: 1.5rem;
+      color: #b42318;
+      background: #fffbfa;
+      border-color: #fecdca;
+      text-align: center;
+    }
+    .trend-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: .6rem;
+      margin-bottom: 1rem;
+    }
+    .trend-kpi-grid > div {
+      min-width: 0 !important;
+      padding: .75rem .9rem !important;
+      border-radius: var(--radius-md) !important;
+      background: var(--surface-subtle) !important;
+      border-color: var(--border) !important;
+    }
+    .trend-kpi-grid > div > div:nth-child(2) {
+      font-size: 1.05rem !important;
+      line-height: 1.25;
+    }
+    .trend-analysis-body > div[style*="linear-gradient(180deg,#0f172a"] {
+      background: linear-gradient(180deg, #1f2937 0%, #344054 100%) !important;
+      border-radius: var(--radius-md) !important;
+      padding: 1.1rem 1.1rem .8rem !important;
+      margin-bottom: .8rem !important;
+    }
+    .trend-analysis-body > div[style*="linear-gradient(180deg,#0f172a"] > div[style*="background-image"] {
+      opacity: .45;
+    }
+    .trend-analysis-body > div[style*="background:#f8fafc"] {
+      border-color: var(--border) !important;
+      border-radius: var(--radius-md) !important;
+      padding: .85rem !important;
+      margin-bottom: .8rem !important;
+    }
+    /* Keep the trend report in the same quiet graphite/silver language as the
+       search and budget surfaces. The chart remains visually prominent
+       without introducing a second dark-theme UI inside the report. */
+    .trend-analysis-card .analysis-header {
+      background: linear-gradient(135deg, #f8fafc 0%, #e4e7ec 100%) !important;
+      color: var(--text) !important;
+      border-bottom: 1px solid var(--border);
+    }
+    .trend-analysis-card .analysis-header iconify-icon { color: #667085; }
+    .trend-analysis-card .analysis-header button { color: #98a2b3 !important; }
+    .trend-analysis-card .analysis-header button:hover { color: #344054 !important; }
+    .trend-analysis-body > div[style*="linear-gradient(180deg,#0f172a"] {
+      background: linear-gradient(180deg, #f8fafc 0%, #eef1f5 100%) !important;
+      border: 1px solid var(--border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+    }
+    .trend-analysis-body > div[style*="linear-gradient(180deg,#0f172a"] > div[style*="background-image"] {
+      opacity: .35;
+      background-image: linear-gradient(rgba(52,64,84,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(52,64,84,.08) 1px,transparent 1px) !important;
+    }
+    .trend-analysis-body > div[style*="linear-gradient(180deg,#0f172a"] [style*="color:#f1f5f9"],
+    .trend-analysis-body > div[style*="linear-gradient(180deg,#0f172a"] [style*="color:#94a3b8"] {
+      color: #667085 !important;
+    }
+    .trend-analysis-body > div[style*="linear-gradient(180deg,#0f172a"] [style*="color:#f1f5f9"] {
+      color: #1d2939 !important;
+    }
+    .trend-analysis-body > div[style*="linear-gradient(180deg,#0f172a"] canvas { position: relative; z-index: 1; }
+    .trend-analysis-body > div[style*="background:#f8fafc"] > div[style*="background:"] > div {
+      background: linear-gradient(135deg, #667085, #98a2b3) !important;
+      color: #fff !important;
+    }
+    .trend-analysis-body > div[style*="background:#eff6ff"] {
+      background: #f2f4f7 !important;
+      border-left-color: #667085 !important;
+    }
+    .trend-analysis-body > div[style*="background:#eff6ff"] div,
+    .trend-analysis-body > div[style*="background:#eff6ff"] li { color: #475467 !important; }
+    .trend-analysis-body details { background: #f8fafc !important; border-color: var(--border) !important; }
+    .trend-analysis-body details summary { color: #344054 !important; }
+    @media (max-width: 700px) {
+      .trend-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .trend-analysis-card .analysis-header { padding: .85rem 1rem; }
+      .trend-analysis-body { padding: .9rem; }
+    }
+    @media (max-width: 420px) {
+      .trend-kpi-grid { grid-template-columns: 1fr 1fr; gap: .45rem; }
+      .trend-kpi-grid > div { padding: .65rem .7rem !important; }
+    }
     .budget-score-bar {
       height: 6px;
       background: #f3f4f6;

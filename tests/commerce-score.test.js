@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { computeIndicators } = require('../js/commerce-score.js');
+const { computeIndicators, buildPeerContext, summarizeTrendMetrics } = require('../js/commerce-score.js');
 
 const okMetrics = {
   arti: { status: 'ok' }, patent: { status: 'ok' },
@@ -79,4 +79,74 @@ test('논문 5~19건의 성장 후보는 초기 탐색 후보로 분리한다', 
   });
   assert.equal(result.eligible, false);
   assert.equal(result.exploratory, true);
+});
+
+test('논문과 특허가 같은 규모이면 직접 공백 신호는 0에 가깝다', () => {
+  const result = computeIndicators({
+    counts: { arti: 100, patent: 100, ntis: 10, report: 1 },
+    metrics: okMetrics,
+    queryMeta: { comparable: true, variantsTried: ['동일 규모'] },
+    trendSignal: { status: 'ok', growthRate: 0, recent: 20, prev: 20, yearlyCounts: [10, 10, 10, 10] },
+  });
+  assert.equal(result.components.directGapSignal, 0);
+});
+
+test('핵심 지표 객체가 누락되면 정상 조회로 간주하지 않는다', () => {
+  const result = computeIndicators({
+    counts: { arti: 100, patent: 10, ntis: 10, report: 1 },
+    metrics: { arti: { status: 'ok' }, ntis: { status: 'ok' }, report: { status: 'ok' } },
+    queryMeta: { comparable: true, variantsTried: ['누락 지표'] },
+    trendSignal: { status: 'ok', growthRate: 0, recent: 20, prev: 20, yearlyCounts: [10, 10, 10, 10] },
+  });
+  assert.equal(result.eligible, false);
+});
+
+test('오류 후보와 연구 기반 부족 후보는 후보군 중앙값에서 제외한다', () => {
+  const context = buildPeerContext([
+    { counts: { arti: 200, patent: 10 }, metrics: { arti: { status: 'ok' }, patent: { status: 'ok' } } },
+    { counts: { arti: 150, patent: 20 }, metrics: { arti: { status: 'ok' }, patent: { status: 'ok' } } },
+    { counts: { arti: 120, patent: 30 }, metrics: { arti: { status: 'ok' }, patent: { status: 'no_result' } } },
+    { counts: { arti: 300, patent: 0 }, metrics: { arti: { status: 'ok' }, patent: { status: 'error' } } },
+    { counts: { arti: 2, patent: 0 }, metrics: { arti: { status: 'ok' }, patent: { status: 'no_result' } } },
+  ]);
+  assert.equal(context.peerCount, 3);
+  assert.ok(context.medianPatentIntensity > 0);
+});
+
+test('검색 완화 단계가 깊을수록 데이터 신뢰도가 낮아진다', () => {
+  const base = {
+    counts: { arti: 200, patent: 10, ntis: 10, report: 1 }, metrics: okMetrics,
+    trendSignal: { status: 'ok', growthRate: 0, recent: 20, prev: 20, yearlyCounts: [10, 10, 10, 10] },
+  };
+  const shallow = computeIndicators({ ...base, queryMeta: { comparable: true, relaxed: true, relaxationDepth: 1, variantsTried: ['a', 'b'] } });
+  const deep = computeIndicators({ ...base, queryMeta: { comparable: true, relaxed: true, relaxationDepth: 4, variantsTried: ['a', 'b', 'c', 'd', 'e'] } });
+  assert.ok(shallow.confidence > deep.confidence);
+});
+
+test('최근 4개 연도 관측이 모두 0이면 추세 상태는 empty다', () => {
+  const trend = summarizeTrendMetrics([
+    { value: 0, status: 'no_result' }, { value: 0, status: 'no_result' },
+    { value: 0, status: 'no_result' }, { value: 0, status: 'no_result' },
+  ]);
+  assert.equal(trend.status, 'empty');
+  assert.equal(trend.growthRate, 0);
+});
+
+test('미연결 외부 데이터는 부정 근거가 아니라 근거 범위 부족으로 분리한다', () => {
+  const result = computeIndicators({
+    counts: { arti: 200, patent: 20, ntis: 100, report: 10 }, metrics: okMetrics,
+    queryMeta: { comparable: true, variantsTried: ['근거 범위'] },
+    enrichment: {
+      patentFamily: { status: 'not_connected' }, market: { status: 'not_connected' }, trl: { status: 'not_connected' },
+    },
+  });
+  assert.equal(result.evidenceCoverage, 90);
+  assert.equal(result.externalDataStatus, 'not_connected');
+});
+
+test('보고서 1건을 보고서 근거 만점으로 처리하지 않는다', () => {
+  const one = computeIndicators({ counts: { arti: 100, patent: 5, ntis: 10, report: 1 }, metrics: okMetrics });
+  const many = computeIndicators({ counts: { arti: 100, patent: 5, ntis: 10, report: 50 }, metrics: okMetrics });
+  assert.ok(one.components.reportSignal < many.components.reportSignal);
+  assert.ok(one.components.reportSignal < 100);
 });

@@ -28,12 +28,12 @@
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex items-center justify-between h-16">
         <div class="flex items-center gap-3 cursor-pointer" onclick="resetToHome()">
-          <div class="w-8 h-8 rounded bg-black flex items-center justify-center">
+          <div class="brand-mark w-8 h-8 rounded flex items-center justify-center">
             <iconify-icon icon="solar:atom-bold-duotone" style="color: #fff;" width="18"></iconify-icon>
           </div>
           <div>
-            <span class="font-bold text-black text-lg tracking-tight">R&amp;D</span>
-            <span class="text-black font-medium text-lg tracking-tight"> Intelligence</span>
+            <span class="brand-wordmark font-bold text-lg tracking-tight">R&amp;D</span>
+            <span class="brand-wordmark font-medium text-lg tracking-tight"> Intelligence</span>
           </div>
         </div>
 
@@ -122,8 +122,8 @@
           </div>
         </div>
 
-        <!-- Persistent DB Switcher (Always Visible) -->
-        <div class="flex justify-center z-20 relative">
+        <!-- Persistent DB Switcher + integrated search trigger -->
+        <div class="home-search-controls flex flex-wrap justify-center items-center z-20 relative">
           <div class="inline-flex rounded-full p-1 border border-border bg-white shadow-sm db-toggle-wrap">
             <button type="button" class="db-btn active db-scienceon" id="btnDbScienceON"
               onclick="setDatabase('SCIENCEON')">
@@ -133,11 +133,8 @@
               NTIS
             </button>
           </div>
-        </div>
-
-        <!-- Home Only Button (Search trigger) -->
-        <div class="home-only flex flex-wrap justify-center gap-3 mt-2">
-          <button type="button" onclick="doSearch()" class="btn-primary" id="searchBtn">
+          <!-- Home Only Button (Search trigger) -->
+          <button type="button" onclick="doSearch()" class="btn-primary home-only" id="searchBtn">
             통합 검색
           </button>
         </div>
