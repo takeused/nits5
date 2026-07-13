@@ -18,6 +18,35 @@
       input.select();
     }
 
+    // 식별자는 화면에서 말줄임하더라도 원문 전체를 한 번에 복사할 수 있게 한다.
+    function copyIdentifierValue(value, trigger) {
+      const text = String(value || '').trim();
+      if (!text) return;
+      const finish = () => {
+        if (trigger) {
+          trigger.classList.add('is-copied');
+          setTimeout(() => trigger.classList.remove('is-copied'), 1200);
+        }
+        if (typeof showToast === 'function') showToast('식별자를 복사했습니다.', 'success');
+      };
+      const fallback = () => {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        try { document.execCommand('copy'); } finally { area.remove(); }
+        finish();
+      };
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(text).then(finish).catch(fallback);
+      } else {
+        fallback();
+      }
+    }
+
     // ============================================================
 
     let _tokenRefreshTimer = null;
@@ -2424,7 +2453,11 @@ Respond ONLY with this JSON structure:
           <td><span class="ntis-muted">${escHtml(yearDisplay)}</span></td>
           <td><div class="ntis-cell-ellipsis" title="${escAttr(primaryMeta)}">${escHtml(primaryMeta)}</div></td>
           <td><div class="ntis-cell-ellipsis" title="${escAttr(sourceText)}">${escHtml(sourceText)}</div></td>
-          <td><div class="ntis-cell-ellipsis" title="${escAttr(identifierText)}">${escHtml(identifierText)}</div></td>
+          <td>
+            <button type="button" class="identifier-copy ntis-cell-ellipsis" title="클릭하여 식별자 전체 복사"
+              aria-label="식별자 복사" data-identifier="${escAttr(identifierText)}"
+              onclick="event.stopPropagation();copyIdentifierValue(this.dataset.identifier,this)">${escHtml(identifierText)}</button>
+          </td>
           <td>
             <div class="ntis-row-actions">
               ${target === 'RESEARCHER' ? `<button type="button" class="ntis-row-btn"
@@ -2634,6 +2667,8 @@ Respond ONLY with this JSON structure:
               <iconify-icon icon="solar:arrow-right-up-linear" width="11" style="color:#9ca3af; vertical-align:middle; margin-left:2px;"></iconify-icon>
             </a>
             ${sourceMeta ? `<div class="ntis-result-meta">${escHtml(sourceMeta)}</div>` : ''}
+            ${pjtNo ? `<button type="button" class="identifier-copy ntis-result-meta ntis-project-id" title="클릭하여 과제번호 전체 복사"
+              data-identifier="${escAttr(pjtNo)}" onclick="event.stopPropagation();copyIdentifierValue(this.dataset.identifier,this)">과제번호 ${escHtml(pjtNo)}</button>` : ''}
           </td>
           <td><span class="ntis-money">${escHtml(annualBudget)}</span></td>
           <td><span class="ntis-muted">${escHtml(period)}</span></td>
@@ -2923,8 +2958,10 @@ Respond ONLY with this JSON structure:
         <!-- Footer -->
         <div class="flex items-center justify-between mt-5 pt-3 border-t border-border">
           <div class="flex items-center gap-3">
-            ${doi ? `<span class="text-xs text-tertiary truncate max-w-[200px]">DOI: ${escHtml(doi)}</span>` : ''}
-            ${cn ? `<span class="text-xs text-tertiary font-mono truncate">${escHtml(cn)}</span>` : ''}
+            ${doi ? `<button type="button" class="identifier-copy card-identifier-copy" title="클릭하여 DOI 전체 복사"
+              data-identifier="${escAttr(`DOI ${doi}`)}" onclick="event.stopPropagation();copyIdentifierValue(this.dataset.identifier,this)">DOI: ${escHtml(doi)}</button>` : ''}
+            ${cn ? `<button type="button" class="identifier-copy card-identifier-copy font-mono" title="클릭하여 식별자 전체 복사"
+              data-identifier="${escAttr(cn)}" onclick="event.stopPropagation();copyIdentifierValue(this.dataset.identifier,this)">${escHtml(cn)}</button>` : ''}
             ${target === 'RESEARCHER' ? `<button type="button" class="btn-secondary text-xs" onclick="event.stopPropagation();showDeepProfile('${escAttr(title)}','${escAttr(publisher)}')" data-name="${escAttr(title)}" data-subtitle="${escAttr(publisher)}"><iconify-icon icon="solar:user-circle-bold-duotone" width="13"></iconify-icon>심층 프로필</button>` : ''}
           </div>
           <div class="flex items-center gap-2">

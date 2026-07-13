@@ -987,6 +987,25 @@
       color: #3730a3;
     }
     .budget-more-count { color: var(--tertiary); font-weight: 500; }
+    .identifier-copy {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: copy;
+    }
+    .identifier-copy:hover { color: #3730a3; text-decoration: underline; text-underline-offset: 2px; }
+    .identifier-copy.is-copied { color: var(--success); text-decoration: none; }
+    .card-identifier-copy { max-width: 220px; font-size: .75rem; color: var(--tertiary); }
+    .ntis-project-id { max-width: 220px; }
     .budget-score-bar {
       height: 6px;
       background: #f3f4f6;

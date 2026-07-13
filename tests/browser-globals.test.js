@@ -159,3 +159,15 @@ test('home keyword chips fill the search input without auto-running a search', (
   assert.match(fn, /input\.focus\(\)/);
   assert.doesNotMatch(fn, /doSearch\(\)/);
 });
+
+test('identifiers are copyable across table and card result views', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'css/style.css'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, 'js/ui.js'), 'utf8');
+
+  assert.match(ui, /function copyIdentifierValue\(value, trigger\)/);
+  assert.match(ui, /class="identifier-copy ntis-cell-ellipsis"/);
+  assert.match(ui, /class="identifier-copy card-identifier-copy/);
+  assert.match(ui, /copyIdentifierValue\(this\.dataset\.identifier,this\)/);
+  assert.match(css, /\.identifier-copy\s*\{/);
+  assert.match(css, /cursor:\s*copy/);
+});
