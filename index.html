@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="R&amp;D Intelligence — ScienceON·NTIS 통합 검색과 기술 트렌드·사업화·적정 연구비 AI 분석 플랫폼">
+  <title>R&amp;D Intelligence</title>
+  <!-- 인라인 SVG 파비콘 (외부 요청 없음 — 인트라넷 오프라인 대응) -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111'/%3E%3Ctext x='16' y='21' font-family='Arial,sans-serif' font-size='13' font-weight='bold' fill='%23fff' text-anchor='middle'%3ER%26D%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=Outfit:wght@300;400;600;700;800&display=swap"
+    rel="stylesheet">
+  <!-- 라이브러리 로컬 내장(vendor): CDN 차단 인트라넷에서도 동작 -->
+  <script defer src="vendor/tailwind.js"></script>
+  <script defer src="vendor/iconify-icon.min.js"></script>
+  <script defer src="vendor/crypto-js.min.js"></script>
+  <script defer src="vendor/chart.umd.min.js"></script>
+  <script defer src="vendor/chartjs-plugin-annotation.min.js"></script>
+<link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+  <!-- Navigation -->
+  <nav class="glass-nav sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-3 cursor-pointer" onclick="resetToHome()">
+          <div class="w-8 h-8 rounded bg-black flex items-center justify-center">
+            <iconify-icon icon="solar:atom-bold-duotone" style="color: #fff;" width="18"></iconify-icon>
+          </div>
+          <div>
+            <span class="font-bold text-black text-lg tracking-tight">R&amp;D</span>
+            <span class="text-black font-medium text-lg tracking-tight"> Intelligence</span>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <!-- 다크/라이트 모드 토글 -->
+          <button type="button" id="themeToggle" onclick="toggleTheme()" class="btn-secondary" title="다크/라이트 모드 전환">
+            <iconify-icon id="themeIcon" icon="solar:moon-bold-duotone" width="16"></iconify-icon>
+          </button>
+          <!-- 즐겨찾기 -->
+          <button type="button" onclick="openFavPanel()" class="btn-secondary" title="즐겨찾기">
+            <iconify-icon icon="solar:bookmark-bold-duotone" width="16"></iconify-icon>
+            <span class="hidden sm:inline">즐겨찾기</span>
+            <span id="favCount" class="hidden text-xs bg-amber-400 text-black rounded-full px-1.5 font-bold"></span>
+          </button>
+          <!-- 비교 검색 -->
+          <button type="button" onclick="toggleCompare()" id="compareToggleBtn" class="btn-secondary hidden sm:flex"
+            title="비교 검색">
+            <iconify-icon icon="solar:mirror-left-bold-duotone" width="16"></iconify-icon>
+            <span>비교 검색</span>
+          </button>
+          <!-- API 상태 표시 -->
+          <div id="apiStatus" class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border api-status-pill">
+            <span id="statusDot" class="w-1.5 h-1.5 rounded-full bg-gray-600"></span>
+            <span id="statusText">API 미설정</span>
+          </div>
+          <button type="button" id="apiSettingsBtn" onclick="openSettings()" class="btn-secondary">
+            <iconify-icon icon="solar:settings-bold-duotone" width="16"></iconify-icon>
+            <span class="hidden sm:inline">API 설정</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- 프록시 오프라인 경고 배너 -->
+  <div id="proxyOfflineBanner" class="hidden bg-amber-50 border-b border-amber-200 px-4 py-2">
+    <div class="max-w-7xl mx-auto flex items-center gap-3 text-xs text-amber-800">
+      <iconify-icon icon="solar:danger-triangle-bold-duotone" width="16"
+        class="text-amber-500 flex-shrink-0"></iconify-icon>
+      <span><strong>프록시 서버 미연결.</strong> CORS 오류가 발생할 수 있습니다.</span>
+      <span class="text-amber-600">→ <code class="bg-amber-100 px-1 rounded">서버시작.bat</code> 실행 후 새로고침하세요</span>
+      <button onclick="checkProxy()"
+        class="ml-auto flex-shrink-0 bg-amber-200 hover:bg-amber-300 text-amber-900 px-2 py-0.5 rounded font-medium transition-colors">재확인</button>
+    </div>
+  </div>
+
+  <!-- Hero Section -->
+  <section class="hero-section flex flex-col items-center px-4 relative">
+    <div class="hero-gradient"></div>
+
+    <div class="w-full max-w-3xl mx-auto text-center relative z-10">
+      <!-- Big Logo Area (Home Only) -->
+      <div class="home-only mb-8">
+        <h1 class="hero-title">R&amp;D Intelligence</h1>
+      </div>
+
+      <!-- Analysis Tools Toolbar (항상 표시 — 검색바 위, 홈/검색결과 모두 유지) -->
+      <div class="flex flex-wrap justify-center gap-2 mb-5">
+        <button type="button" onclick="runTrendAnalysis()" class="btn-secondary text-sm">
+          <iconify-icon icon="solar:chart-2-bold-duotone" width="16"></iconify-icon>
+          기술 트렌드 분석
+        </button>
+        <button type="button" onclick="runTechCommerceAnalysis()" class="btn-secondary text-sm">
+          <iconify-icon icon="solar:graph-up-bold-duotone" width="16"></iconify-icon>
+          연구–IP 전환 공백 분석
+        </button>
+        <button type="button" onclick="openBudgetModal()" class="btn-secondary text-sm">
+          <iconify-icon icon="solar:calculator-bold-duotone" width="16"></iconify-icon>
+          적정 연구비 산출
+        </button>
+      </div>
+
+      <!-- Search Box Area -->
+      <div class="flex flex-col items-center gap-4 w-full">
+        <div class="search-wrap-rel">
+          <div class="search-icon-wrap w-full">
+            <iconify-icon icon="solar:magnifer-bold" class="search-icon" width="20"></iconify-icon>
+            <input id="searchInput" type="text" placeholder="검색어를 입력하세요" class="search-input w-full"
+              onkeydown="if(event.key==='Enter') doSearch()" onfocus="showHistory()"
+              onblur="setTimeout(hideHistory,200)" autocomplete="off" aria-label="검색어 입력">
+          </div>
+          <!-- 검색 히스토리 드롭다운 -->
+          <div id="historyDropdown" class="hidden">
+            <ul id="historyList"></ul>
+          </div>
+        </div>
+
+        <!-- Persistent DB Switcher (Always Visible) -->
+        <div class="flex justify-center z-20 relative">
+          <div class="inline-flex rounded-full p-1 border border-border bg-white shadow-sm db-toggle-wrap">
+            <button type="button" class="db-btn active db-scienceon" id="btnDbScienceON"
+              onclick="setDatabase('SCIENCEON')">
+              ScienceON
+            </button>
+            <button type="button" class="db-btn" id="btnDbNTIS" onclick="setDatabase('NTIS')">
+              NTIS
+            </button>
+          </div>
+        </div>
+
+        <!-- Home Only Button (Search trigger) -->
+        <div class="home-only flex flex-wrap justify-center gap-3 mt-2">
+          <button type="button" onclick="doSearch()" class="btn-primary" id="searchBtn">
+            통합 검색
+          </button>
+        </div>
+      </div>
+
+      <!-- Content Type Tabs (Always visible but styled differently in search mode) -->
+      <div class="mt-8 tabs-wrap">
+        <!-- ScienceON Tabs -->
+        <div id="tabsScienceON" class="flex flex-wrap justify-center gap-1.5 transition-all duration-300">
+          <button type="button" class="tab-btn active" data-target="ARTI" onclick="setTarget(this)">논문</button>
+          <button type="button" class="tab-btn" data-target="PATENT" onclick="setTarget(this)">특허</button>
+          <button type="button" class="tab-btn" data-target="REPORT" onclick="setTarget(this)">보고서</button>
+          <button type="button" class="tab-btn" data-target="ATT" onclick="setTarget(this)">동향</button>
+          <button type="button" class="tab-btn" data-target="RESEARCHER" onclick="setTarget(this)">연구자</button>
+          <button type="button" class="tab-btn" data-target="ORGAN" onclick="setTarget(this)">기관</button>
+          <button type="button" class="tab-btn" data-target="TREND" onclick="setTarget(this)">트렌드</button>
+        </div>
+
+        <!-- NTIS Tabs -->
+        <div id="tabsNTIS" class="hidden flex flex-wrap justify-center gap-1.5 transition-all duration-300">
+          <button type="button" class="tab-btn ntis-tab active" data-target="NTIS_prjt"
+            onclick="setTarget(this)">R&D과제</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Advanced Options Bar -->
+  <div id="advancedBar" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-4 hidden">
+    <div class="options-bar">
+      <div class="flex flex-wrap gap-3 items-center">
+        <div class="flex items-center gap-2">
+          <label for="searchField" class="text-xs text-gray-500">검색 필드</label>
+          <select class="select-field" id="searchField" title="검색 필드 선택" aria-label="검색 필드">
+            <option value="BI">전체</option>
+            <option value="TI">제목</option>
+            <option value="AU">저자/발명자</option>
+            <option value="AB">초록</option>
+            <option value="KW">키워드</option>
+            <option value="PB">출판사/기관</option>
+            <option value="PY">발행년도</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-2">
+          <label for="sortField" class="text-xs text-gray-500">정렬</label>
+          <select class="select-field" id="sortField" title="정렬 방식 선택" aria-label="정렬 방식">
+            <option value="">정확도순</option>
+            <option value="pubyear">발행년도순</option>
+            <option value="title">제목순</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-2">
+          <label for="rowCount" class="text-xs text-gray-500">표시 건수</label>
+          <select class="select-field" id="rowCount" title="페이지당 표시 건수" aria-label="페이지당 표시 건수">
+            <option value="10">10건</option>
+            <option value="20">20건</option>
+            <option value="50">50건</option>
+            <option value="100">100건</option>
+          </select>
+        </div>
+        <!-- NTIS 연도 필터 (NTIS 검색 시에만 표시) -->
+        <div id="ntisYearFilter" class="hidden flex items-center gap-2">
+          <label class="text-xs text-gray-500">연도</label>
+          <input type="number" id="ntisYearFrom" placeholder="시작년도" min="2000" max="2099" class="select-field"
+            style="width:90px; padding:0.5rem 0.625rem;" title="시작 연도">
+          <span class="text-xs text-gray-600">~</span>
+          <input type="number" id="ntisYearTo" placeholder="종료년도" min="2000" max="2099" class="select-field"
+            style="width:90px; padding:0.5rem 0.625rem;" title="종료 연도">
+        </div>
+        <div id="groupingWrapper" class="flex items-center gap-2 ml-auto">
+          <input type="checkbox" id="groupingCheck" class="accent-green-400">
+          <label for="groupingCheck" class="text-xs text-gray-400 cursor-pointer">중복 그룹핑</label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results Section -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-20">
+
+    <!-- Results header -->
+    <div id="resultsHeader" class="hidden flex items-center justify-between mb-8 pb-4 border-b border-border">
+      <div>
+        <span id="resultTotal" class="text-black font-bold text-xl"></span>
+        <span class="text-secondary text-sm ml-2" id="resultQuery"></span>
+      </div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <!-- 내보내기 드롭다운 -->
+        <div class="relative">
+          <button type="button" id="exportMenuBtn" onclick="toggleExportMenu()" class="btn-secondary text-xs" title="내보내기">
+            <iconify-icon icon="solar:download-bold-duotone" width="14"></iconify-icon>
+            내보내기
+            <iconify-icon icon="solar:alt-arrow-down-bold" width="11"></iconify-icon>
+          </button>
+          <div id="exportMenu" class="hidden absolute right-0 top-full mt-1 bg-white border border-border rounded-xl shadow-lg z-50 py-1 min-w-[130px]">
+            <button type="button" onclick="exportCSV()" class="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+              <iconify-icon icon="solar:file-text-bold-duotone" width="14" class="text-green-500"></iconify-icon>CSV
+            </button>
+            <button type="button" onclick="exportBibTeX()" class="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+              <iconify-icon icon="solar:document-bold-duotone" width="14" class="text-blue-500"></iconify-icon>BibTeX (.bib)
+            </button>
+            <button type="button" onclick="exportRIS()" class="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+              <iconify-icon icon="solar:file-check-bold-duotone" width="14" class="text-purple-500"></iconify-icon>RIS (.ris)
+            </button>
+          </div>
+        </div>
+        <button type="button" onclick="copyShareLink()" class="btn-secondary text-xs" title="공유 링크 복사">
+          <iconify-icon icon="solar:link-bold-duotone" width="14"></iconify-icon>
+          공유
+        </button>
+        <button type="button" onclick="toggleAdvanced()" class="btn-secondary text-xs" id="advancedToggle">
+          <iconify-icon icon="solar:tuning-2-bold-duotone" width="14"></iconify-icon>
+          상세 검색
+        </button>
+        <button type="button" onclick="showYearInstCharts()" class="btn-secondary text-xs" title="연도별/기관별 분포 차트">
+          <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="14"></iconify-icon>
+          인사이트
+        </button>
+      </div>
+    </div>
+
+    <!-- 인사이트 바: 키워드 클라우드 + 정렬 -->
+    <div id="sortBar" class="hidden mb-4 space-y-2">
+      <div id="keywordCloud" class="flex flex-wrap gap-1.5"></div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs text-gray-400">결과 내 정렬</span>
+        <button type="button" class="sort-btn active" data-sort="" onclick="applyClientSort('')">기본순</button>
+        <button type="button" class="sort-btn" data-sort="year-desc" onclick="applyClientSort('year-desc')">최신순</button>
+        <button type="button" class="sort-btn" data-sort="year-asc" onclick="applyClientSort('year-asc')">오래된순</button>
+        <button type="button" class="sort-btn" data-sort="title" onclick="applyClientSort('title')">제목순</button>
+      </div>
+    </div>
+
+    <!-- Analysis Section -->
+    <div id="analysisSection" class="hidden mb-12 fade-up"></div>
+
+    <!-- Loading state -->
+    <div id="loadingState" class="hidden flex flex-col items-center justify-center py-32 gap-6">
+      <div class="spinner"></div>
+      <p class="text-secondary text-sm">과학기술 데이터를 검색하는 중...</p>
+    </div>
+
+    <!-- Empty state (initial) -->
+    <div id="emptyState" class="flex flex-col items-center justify-center py-20 gap-4">
+      <div class="text-center home-only">
+        <p class="text-tertiary text-sm mb-3">이런 키워드로 시작해 보세요</p>
+        <div id="exampleChips" class="flex flex-nowrap justify-center gap-2 mx-auto">
+          <button type="button" class="example-chip" onclick="runExampleSearch('인공지능')">인공지능</button>
+          <button type="button" class="example-chip" onclick="runExampleSearch('자율주행')">자율주행</button>
+          <button type="button" class="example-chip" onclick="runExampleSearch('이차전지')">이차전지</button>
+          <button type="button" class="example-chip" onclick="runExampleSearch('디지털트윈')">디지털트윈</button>
+          <button type="button" class="example-chip" onclick="runExampleSearch('양자컴퓨팅')">양자컴퓨팅</button>
+          <button type="button" class="example-chip" onclick="runExampleSearch('재난안전')">재난안전</button>
+          <button type="button" class="example-chip" onclick="runExampleSearch('수소에너지')">수소에너지</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- No results state -->
+    <div id="noResultState" class="hidden flex flex-col items-center justify-center py-20 gap-3">
+      <iconify-icon icon="solar:ghost-bold-duotone" class="no-result-icon" width="48"></iconify-icon>
+      <p class="text-gray-400 font-medium">검색 결과가 없습니다</p>
+      <p class="text-gray-600 text-sm">다른 검색어나 콘텐츠 유형을 시도해보세요</p>
+      <div id="ntisDebugPanel" class="hidden mt-4 w-full max-w-2xl text-left">
+        <div class="p-3 bg-gray-900 rounded-lg border border-orange-500/30 space-y-2">
+          <p class="text-xs font-semibold text-orange-400">NTIS 응답 진단</p>
+          <p class="text-xs text-gray-400">요청 URL:</p>
+          <div id="ntisDebugUrl" class="text-xs font-mono text-blue-300 break-all"></div>
+          <p class="text-xs text-gray-400 mt-2">응답 (원시 XML):</p>
+          <pre id="ntisDebugRaw"
+            class="text-xs font-mono text-green-300 overflow-x-auto whitespace-pre-wrap break-all max-h-64 overflow-y-auto p-2 rounded"
+            style="background:rgba(0,0,0,0.4);"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results Grid -->
+    <div id="resultsGrid" class="space-y-3"></div>
+
+    <!-- Pagination -->
+    <div id="pagination" class="hidden flex justify-center items-center gap-2 mt-8"></div>
+  </main>
+
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="modal-bg hidden" onclick="if(event.target===this)closeSettings()">
+    <div class="modal-box modal-box-wide">
+      <!-- 헤더 -->
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h2 class="text-black font-bold text-lg">API 설정</h2>
+          <p class="text-gray-500 text-xs mt-0.5">인증 정보는 브라우저 로컬 저장소에 자동 저장됩니다</p>
+        </div>
+        <button type="button" onclick="closeSettings()" class="modal-close-btn" aria-label="설정 닫기" title="닫기">
+          <iconify-icon icon="solar:close-circle-bold-duotone" width="22"></iconify-icon>
+        </button>
+      </div>
+
+      <!-- 2열 그리드 -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
+
+        <!-- 왼쪽 열: ScienceON API -->
+        <div class="space-y-3">
+          <p class="text-[10px] uppercase tracking-widest text-gray-400 font-semibold flex items-center gap-1.5">
+            <iconify-icon icon="solar:database-bold-duotone" width="12"></iconify-icon>ScienceON API
+          </p>
+          <div>
+            <div class="text-xs font-semibold text-black mb-1">Client ID</div>
+            <input type="text" id="clientIdInput" placeholder="64자리 클라이언트 ID" class="input-field" autocomplete="off"
+              oninput="autoSaveField('sc_client_id', this.value, 'clientId')">
+          </div>
+          <div>
+            <div class="text-xs font-semibold text-black mb-1">인증키 (AES256)</div>
+            <input type="text" id="apiKeyInput" placeholder="발급받은 인증키 (32자)" class="input-field" autocomplete="off"
+              oninput="autoSaveField('sc_api_key', this.value, 'apiKey')">
+          </div>
+          <div>
+            <div class="text-xs font-semibold text-black mb-1">MAC 주소</div>
+            <input type="text" id="macAddrInput" placeholder="예: 9C-6B-00-8C-64-FD" class="input-field"
+              autocomplete="off" oninput="autoSaveField('sc_mac_addr', this.value, 'macAddr')">
+            <p class="text-[10px] text-gray-400 mt-1">※ 토큰은 서버에 등록된 MAC으로 자동 발급됩니다. 이 값을 바꿔도 토큰 발급에는 영향을 주지 않습니다.</p>
+          </div>
+          <div class="flex gap-2 pt-1">
+            <button type="button" onclick="requestToken()" id="tokenReqBtn"
+              class="btn-primary flex-1 justify-center py-2 text-xs">
+              토큰 발급
+            </button>
+            <button type="button" onclick="probeToken()" id="tokenProbeBtn"
+              class="btn-secondary flex-1 justify-center py-2 text-xs">
+              자동 탐색
+            </button>
+          </div>
+          <div id="tokenReqResult" class="hidden text-[10px] p-2 rounded bg-white border border-border"></div>
+        </div>
+
+        <!-- 오른쪽 열: 토큰 + 부가 API -->
+        <div class="space-y-3">
+          <p class="text-[10px] uppercase tracking-widest text-gray-400 font-semibold flex items-center gap-1.5">
+            <iconify-icon icon="solar:key-bold-duotone" width="12"></iconify-icon>토큰 &amp; 부가 API
+          </p>
+          <div>
+            <div class="text-xs font-semibold text-black mb-1">Access Token</div>
+            <textarea id="tokenInput" placeholder="토큰 발급 버튼 사용 권장" class="input-field text-xs font-mono" rows="2"
+              oninput="autoSaveField('sc_token', this.value, 'token')"></textarea>
+          </div>
+          <div>
+            <div class="text-xs font-semibold text-black mb-1">Refresh Token</div>
+            <input type="text" id="refreshTokenInput" placeholder="자동 갱신용" class="input-field text-xs font-mono"
+              autocomplete="off" oninput="autoSaveField('sc_refresh_token', this.value, 'refreshToken')">
+          </div>
+          <div>
+            <div class="text-xs font-semibold text-black mb-1 flex items-center gap-1">
+              <iconify-icon icon="solar:buildings-3-bold-duotone" width="12"></iconify-icon>
+              NTIS API 인증키
+            </div>
+            <input type="text" id="ntisKeyInput" placeholder="NTIS 발급 인증키" class="input-field" autocomplete="off"
+              oninput="autoSaveField('sc_ntis_key', this.value, 'ntisKey')">
+          </div>
+          <div>
+            <div class="text-xs font-semibold text-black mb-1 flex items-center gap-1.5">
+              <iconify-icon icon="solar:server-bold-duotone" width="12"></iconify-icon>
+              AI 분석 서버 설정
+            </div>
+            <input type="password" id="cerebrasKeyInput" placeholder="Cerebras API 키 (개발 전용)" class="input-field" autocomplete="off"
+              oninput="autoSaveField('sc_cerebras_key', this.value, 'cerebrasKey')">
+            <div id="cerebrasServerStatus" class="input-field text-xs text-gray-500 mt-1" style="height:auto;min-height:38px;">
+              서버 환경변수 CEREBRAS_API_KEY 상태를 확인 중입니다.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="text-[10px] text-tertiary bg-gray-50 p-2 rounded border border-border mt-4">
+        입력 즉시 자동 저장됩니다 &nbsp;·&nbsp; 공용 PC에서는 사용 후 반드시 초기화하세요
+      </div>
+
+      <div class="flex gap-2 mt-4">
+        <button type="button" onclick="clearSettings()" class="btn-secondary flex-1 justify-center py-2.5">
+          초기화
+        </button>
+        <button type="button" onclick="probeToken()"
+          class="btn-secondary flex-1 justify-center py-2.5 flex items-center gap-1">
+          <iconify-icon icon="solar:wifi-check-bold-duotone" width="14"></iconify-icon>
+          연결 테스트
+        </button>
+        <button type="button" onclick="saveSettings()" class="btn-primary flex-1 justify-center py-2.5 font-bold">
+          저장
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 연관컨텐츠 모달 -->
+  <div id="relatedModal" class="modal-bg hidden" onclick="if(event.target===this)closeRelated()">
+    <div class="modal-box" style="max-width:600px;">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-black font-bold text-lg flex items-center gap-2">
+            <iconify-icon icon="solar:link-bold-duotone" width="20" style="color:#111"></iconify-icon>
+            AI 연관컨텐츠
+          </h2>
+          <p id="relatedPjtTitle" class="text-gray-500 text-xs mt-0.5 truncate max-w-[420px]"></p>
+        </div>
+        <button type="button" class="modal-close-btn" onclick="closeRelated()" title="닫기" aria-label="닫기">
+          <iconify-icon icon="solar:close-circle-bold" style="color:#111" width="22"></iconify-icon>
+        </button>
+      </div>
+
+      <div class="flex gap-2 mb-4 flex-wrap">
+        <button type="button" class="tab-btn ntis-tab active" id="relTab-project"
+          onclick="switchRelTab('project', this)">
+          <iconify-icon icon="solar:case-bold-duotone" width="13" class="inline-block mr-1"></iconify-icon>연관과제
+        </button>
+        <button type="button" class="tab-btn ntis-tab" id="relTab-paper" onclick="switchRelTab('paper', this)">
+          <iconify-icon icon="solar:notebook-bold-duotone" width="13" class="inline-block mr-1"></iconify-icon>연관논문
+        </button>
+        <button type="button" class="tab-btn ntis-tab" id="relTab-patent" onclick="switchRelTab('patent', this)">
+          <iconify-icon icon="solar:diploma-bold-duotone" width="13" class="inline-block mr-1"></iconify-icon>연관특허
+        </button>
+        <button type="button" class="tab-btn ntis-tab" id="relTab-researchreport"
+          onclick="switchRelTab('researchreport', this)">
+          <iconify-icon icon="solar:file-text-bold-duotone" width="13" class="inline-block mr-1"></iconify-icon>연관보고서
+        </button>
+      </div>
+
+      <div id="relatedResults" class="space-y-2">
+        <div class="flex justify-center py-8">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer"
+    style="position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px;"></div>
+
+
+  <!-- ══════════════════════════════════════════════════════════
+       Feature 2: 즐겨찾기 컬렉션 관리 모달
+  ══════════════════════════════════════════════════════════ -->
+  <div id="collectionModal" class="modal-bg hidden" onclick="if(event.target===this)closeCollectionManager()">
+    <div class="modal-box" style="max-width:560px;width:95vw;">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-bold text-lg flex items-center gap-2">
+          <iconify-icon icon="solar:folder-bold-duotone" width="20"></iconify-icon>
+          컬렉션 관리
+        </h2>
+        <button type="button" onclick="closeCollectionManager()" class="modal-close-btn" aria-label="닫기">
+          <iconify-icon icon="solar:close-circle-bold-duotone" width="22"></iconify-icon>
+        </button>
+      </div>
+
+      <!-- 새 컬렉션 만들기 -->
+      <div class="flex gap-2 mb-4">
+        <input id="newColName" type="text" placeholder="새 컬렉션 이름" class="input-field flex-1"
+          onkeydown="if(event.key==='Enter')createCollection()">
+        <input id="newColColor" type="color" value="#6366f1" class="w-10 h-10 rounded-lg border border-border cursor-pointer flex-shrink-0" title="컬렉션 색상">
+        <button type="button" onclick="createCollection()" class="btn-primary flex-shrink-0">
+          <iconify-icon icon="solar:add-circle-bold-duotone" width="15"></iconify-icon>생성
+        </button>
+      </div>
+
+      <!-- 컬렉션 목록 -->
+      <div id="collectionList" class="space-y-2 max-h-80 overflow-y-auto"></div>
+
+      <!-- 즐겨찾기 추가 피커 -->
+      <div id="colItemPickerWrap" class="hidden mt-4 border-t border-border pt-4">
+        <p class="text-xs font-semibold text-gray-500 mb-2">즐겨찾기에서 선택</p>
+        <div id="colItemPicker" class="max-h-48 overflow-y-auto space-y-0.5 border border-border rounded-xl p-2"></div>
+        <div class="flex gap-2 mt-3">
+          <button type="button" onclick="confirmAddToCollection()" class="btn-primary flex-1 justify-center">추가</button>
+          <button type="button" onclick="document.getElementById('colItemPickerWrap').classList.add('hidden')" class="btn-secondary flex-1 justify-center">취소</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Feature 3: 태그 & 메모 패널
+  ══════════════════════════════════════════════════════════ -->
+  <div id="memoPanel" style="position:fixed;right:0;top:0;height:100%;width:320px;background:#fff;border-left:1px solid #e5e7eb;z-index:500;transform:translateX(100%);transition:transform .3s cubic-bezier(.16,1,.3,1);display:flex;flex-direction:column;box-shadow:-4px 0 24px rgba(0,0,0,.08);">
+    <style>#memoPanel.open{transform:translateX(0)}</style>
+    <div class="fav-header">
+      <div class="flex items-center gap-2">
+        <iconify-icon icon="solar:notes-bold-duotone" width="20"></iconify-icon>
+        <h2 class="font-bold text-base">메모</h2>
+      </div>
+      <button type="button" onclick="closeMemoPanel()" class="btn-secondary text-xs">
+        <iconify-icon icon="solar:close-circle-bold-duotone" width="14"></iconify-icon>닫기
+      </button>
+    </div>
+    <div class="p-4 space-y-4 flex-1 overflow-y-auto">
+      <div>
+        <p class="text-xs font-semibold text-gray-700 mb-1 truncate" id="memoPanelTitle"></p>
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 block mb-1">태그 (쉼표로 구분)</label>
+        <input id="memoTags" type="text" placeholder="예: 중요, 검토필요, AI" class="input-field w-full">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 block mb-1">메모</label>
+        <textarea id="memoText" rows="6" placeholder="자유롭게 메모를 입력하세요..." class="input-field w-full resize-none"></textarea>
+      </div>
+      <div class="flex gap-2">
+        <button type="button" onclick="saveMemoPanel()" class="btn-primary flex-1 justify-center">
+          <iconify-icon icon="solar:check-circle-bold-duotone" width="14"></iconify-icon>저장
+        </button>
+        <button type="button" onclick="deleteMemo()" class="btn-secondary flex-shrink-0" title="메모 삭제">
+          <iconify-icon icon="solar:trash-bin-2-bold-duotone" width="14"></iconify-icon>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Feature 5: 연구자 심층 프로필 패널
+  ══════════════════════════════════════════════════════════ -->
+  <div id="deepProfilePanel" style="position:fixed;right:0;top:0;height:100%;width:360px;background:#fff;border-left:1px solid #e5e7eb;z-index:500;transform:translateX(100%);transition:transform .3s cubic-bezier(.16,1,.3,1);display:flex;flex-direction:column;box-shadow:-4px 0 24px rgba(0,0,0,.08);">
+    <style>#deepProfilePanel.open{transform:translateX(0)}</style>
+    <div class="fav-header">
+      <div class="flex flex-col gap-0.5 flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <iconify-icon icon="solar:user-circle-bold-duotone" width="20"></iconify-icon>
+          <h2 class="font-bold text-base truncate" id="deepProfileName">연구자 프로필</h2>
+        </div>
+        <p class="text-xs text-gray-400 truncate ml-7" id="deepProfileInst"></p>
+      </div>
+      <button type="button" onclick="closeDeepProfile()" class="btn-secondary text-xs flex-shrink-0">
+        <iconify-icon icon="solar:close-circle-bold-duotone" width="14"></iconify-icon>닫기
+      </button>
+    </div>
+    <div id="deepProfileContent" class="p-4 space-y-4 flex-1 overflow-y-auto"></div>
+  </div>
+
+  <script src="js/state.js"></script>
+  <script src="js/commerce-score.js"></script>
+  <script src="js/budget-core.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/chart.js"></script>
+  <script src="js/features.js"></script>
+  <script src="js/main.js"></script>
+
+  <!-- =========================================================
+       적정 연구비 산출 — 결과 모달
+  ========================================================== -->
+  <div id="budgetResultModal" class="budget-modal-bg hidden" onclick="if(event.target===this)closeBudgetResult()">
+    <div class="budget-modal-box budget-result-box">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
+        <h2 style="font-size:1.125rem; font-weight:700; color:var(--accent); display:flex; align-items:center; gap:8px;">
+          <iconify-icon icon="solar:money-bag-bold-duotone" width="22" style="color:var(--accent);"></iconify-icon>
+          적정 연구개발비 분석 결과
+        </h2>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+          <button type="button" class="btn-budget-secondary" onclick="openBudgetModal()">
+            <iconify-icon icon="solar:restart-bold-duotone" width="14"></iconify-icon>
+            재분석
+          </button>
+          <button type="button" onclick="closeBudgetResult()"
+            style="background:none; border:none; cursor:pointer; color:#9ca3af;" aria-label="닫기">
+            <iconify-icon icon="solar:close-circle-bold-duotone" width="24"></iconify-icon>
+          </button>
+        </div>
+      </div>
+
+      <!-- 연구과제 규모 선택 (항상 표시 · 변경 시 즉시 재산출) -->
+      <div id="budgetScaleBar" style="margin-bottom:1.25rem;">
+        <p style="font-size:0.8rem; color:#6b7280; margin-bottom:0.5rem; font-weight:600; display:flex; align-items:center; gap:0.35rem;">
+          <iconify-icon icon="solar:ruler-bold-duotone" width="15" style="color:#111;"></iconify-icon>
+          연구과제 규모 — 같은 유사과제 분포에서 규모별 백분위 시나리오를 선택합니다
+        </p>
+        <div class="budget-scale-group">
+          <button type="button" class="budget-scale-btn" data-scale="small" onclick="setBudgetScale('small')">
+            <span class="bs-title">소형 과제</span>
+            <span class="bs-desc">중소기업 지원 · 연구범위/목표 작음<br>유사과제 하위분위 기준</span>
+          </button>
+          <button type="button" class="budget-scale-btn is-active" data-scale="medium" onclick="setBudgetScale('medium')">
+            <span class="bs-title">중형 과제</span>
+            <span class="bs-desc">일반 국가R&D · 표준 규모<br>유사과제 중앙·평균 기준</span>
+          </button>
+          <button type="button" class="budget-scale-btn" data-scale="large" onclick="setBudgetScale('large')">
+            <span class="bs-title">대형 과제</span>
+            <span class="bs-desc">연구단 규모 · 목표 원대/범위 포괄적<br>유사과제 상위분위 기준</span>
+          </button>
+        </div>
+
+        <!-- 연구기간(연차) 선택 — 총 연구비 산출에 반영 -->
+        <div style="display:flex; align-items:center; gap:0.6rem; margin-top:0.85rem;">
+          <span style="font-size:0.8rem; color:#6b7280; font-weight:600;">연구기간</span>
+          <div class="budget-year-group" id="budgetYearGroup">
+            <button type="button" class="budget-year-btn is-active" data-year="1" onclick="setBudgetDuration(1)">1년</button>
+            <button type="button" class="budget-year-btn" data-year="2" onclick="setBudgetDuration(2)">2년</button>
+            <button type="button" class="budget-year-btn" data-year="3" onclick="setBudgetDuration(3)">3년</button>
+            <button type="button" class="budget-year-btn" data-year="4" onclick="setBudgetDuration(4)">4년</button>
+            <button type="button" class="budget-year-btn" data-year="5" onclick="setBudgetDuration(5)">5년</button>
+          </div>
+          <span style="font-size:0.72rem; color:#9ca3af;">총 연구비 참고값 = 연 비교기준 예산 × 연차</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:0.6rem; margin-top:0.7rem;">
+          <label for="budgetPhaseSelect" style="font-size:0.8rem; color:#6b7280; font-weight:600;">연구개발단계</label>
+          <select id="budgetPhaseSelect" onchange="setBudgetPhase(this.value)"
+            style="padding:0.4rem 0.6rem;border:1px solid #d1d5db;border-radius:0.45rem;background:#fff;color:#111;font-size:0.78rem;">
+            <option value="ALL">전체 단계</option>
+            <option value="기초">기초연구</option>
+            <option value="응용">응용연구</option>
+            <option value="개발">개발연구</option>
+          </select>
+          <span style="font-size:0.72rem; color:#9ca3af;">선택하면 같은 연구단계의 NTIS 과제를 우선 비교합니다.</span>
+        </div>
+      </div>
+
+      <!-- 검색어 입력 폼 (검색어 없이 열었을 때 표시) -->
+      <div id="budgetQueryForm" class="hidden" style="margin-bottom:1.25rem;">
+        <p style="font-size:0.875rem; color:#6b7280; margin-bottom:0.75rem;">분석할 연구과제명 또는 기술 키워드를 입력하세요.</p>
+        <div style="display:flex; gap:0.5rem;">
+          <input id="budgetQueryInput" type="text"
+            placeholder="예: 이차전지 음극재 개발"
+            style="flex:1; padding:0.625rem 0.875rem; border:1px solid #d1d5db; border-radius:0.5rem; font-size:0.875rem; outline:none; background:#fff; color:#111;"
+            onkeydown="if(event.key==='Enter') _startBudgetWithQuery(this.value)"
+          />
+          <button id="runBtn" type="button" onclick="_startBudgetWithQuery(document.getElementById('budgetQueryInput').value)"
+            style="padding:0.625rem 1.25rem; background:#111; color:#fff; border:none; border-radius:0.5rem; font-size:0.875rem; font-weight:600; cursor:pointer; white-space:nowrap; display:flex; align-items:center; gap:0.375rem;">
+            <iconify-icon icon="solar:calculator-bold-duotone" width="16"></iconify-icon> 분석 시작
+          </button>
+        </div>
+      </div>
+
+      <!-- 분석 진행 바 (분석 중 표시) -->
+      <div id="budgetProgressArea" class="hidden">
+        <div class="budget-step-bar">
+          <div class="budget-step" id="budgetStep1"></div>
+          <div class="budget-step" id="budgetStep2"></div>
+          <div class="budget-step" id="budgetStep3"></div>
+          <div class="budget-step" id="budgetStep4"></div>
+          <div class="budget-step" id="budgetStep5"></div>
+        </div>
+        <p id="budgetStepLabel"
+          style="font-size:0.8125rem; color:var(--accent); font-weight:600; text-align:center; margin-bottom:0.75rem;"></p>
+        <div class="budget-process-log" id="budgetProcessLog"></div>
+      </div>
+
+      <div id="budgetResultContent"></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       즐겨찾기 패널
+  ══════════════════════════════════════════════════════════ -->
+  <div id="favOverlay" onclick="closeFavPanel()"></div>
+  <div id="favPanel">
+    <div class="fav-header">
+      <div class="flex items-center gap-2">
+        <iconify-icon icon="solar:bookmark-bold-duotone" width="20" class="text-amber-400"></iconify-icon>
+        <h2 class="font-bold text-base">즐겨찾기</h2>
+        <span id="favPanelCount" class="text-xs text-gray-400"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button type="button" onclick="openCollectionManager()" class="btn-secondary text-xs" title="컬렉션 관리">
+          <iconify-icon icon="solar:folder-bold-duotone" width="13"></iconify-icon>컬렉션
+        </button>
+        <button type="button" onclick="exportFavCSV()" class="btn-secondary text-xs" title="즐겨찾기 CSV 내보내기">
+          <iconify-icon icon="solar:download-bold-duotone" width="13"></iconify-icon>내보내기
+        </button>
+        <button type="button" onclick="closeFavPanel()" class="btn-secondary text-xs">
+          <iconify-icon icon="solar:close-circle-bold-duotone" width="14"></iconify-icon>닫기
+        </button>
+      </div>
+    </div>
+    <div id="favList" class="flex-1"></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       연구자/기관 프로필 패널
+  ══════════════════════════════════════════════════════════ -->
+  <div id="profilePanel">
+    <div class="fav-header">
+      <div class="flex items-center gap-2">
+        <iconify-icon icon="solar:user-circle-bold-duotone" width="20"></iconify-icon>
+        <h2 class="font-bold text-base" id="profileTitle">프로필</h2>
+      </div>
+      <button type="button" onclick="closeProfilePanel()" class="btn-secondary text-xs">
+        <iconify-icon icon="solar:close-circle-bold-duotone" width="14"></iconify-icon>닫기
+      </button>
+    </div>
+    <div id="profileContent" class="p-5 space-y-4"></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       인사이트 모달 (연도별 + 기관별 차트)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="analyticsModal" class="modal-bg hidden" onclick="if(event.target===this)closeAnalyticsModal()">
+    <div class="modal-box" style="max-width:720px; width:95vw;">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-black font-bold text-lg flex items-center gap-2">
+            <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="20"></iconify-icon>
+            검색 결과 인사이트
+          </h2>
+          <p id="analyticsQuery" class="text-gray-400 text-xs mt-0.5"></p>
+        </div>
+        <button type="button" onclick="closeAnalyticsModal()" class="modal-close-btn" aria-label="닫기">
+          <iconify-icon icon="solar:close-circle-bold-duotone" width="22"></iconify-icon>
+        </button>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <p class="text-sm font-semibold mb-2 flex items-center gap-1.5">
+            <iconify-icon icon="solar:chart-2-bold-duotone" width="14"></iconify-icon>
+            연도별 분포
+          </p>
+          <div id="yearChartWrap">
+            <canvas id="yearChartCanvas"></canvas>
+          </div>
+        </div>
+        <div>
+          <p class="text-sm font-semibold mb-2 flex items-center gap-1.5">
+            <iconify-icon icon="solar:buildings-3-bold-duotone" width="14"></iconify-icon>
+            기관별 분포
+          </p>
+          <div id="instChartWrap">
+            <canvas id="instChartCanvas"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════════════
+       비교 검색 섹션 (메인 콘텐츠 위에 삽입됨)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="compareSection" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-10">
+    <div class="flex items-center gap-3 mb-5 pt-4">
+      <iconify-icon icon="solar:mirror-left-bold-duotone" width="20"></iconify-icon>
+      <h2 class="font-bold text-lg">비교 검색</h2>
+      <button type="button" onclick="runCompare()" class="btn-primary text-sm">비교 실행</button>
+      <button type="button" onclick="toggleCompare()" class="btn-secondary text-sm">닫기</button>
+    </div>
+    <div class="flex gap-3 mb-5">
+      <input id="compareInputA" type="text" placeholder="검색어 A" class="search-input flex-1"
+        onkeydown="if(event.key==='Enter')runCompare()">
+      <span class="flex items-center font-bold text-gray-400">VS</span>
+      <input id="compareInputB" type="text" placeholder="검색어 B" class="search-input flex-1"
+        onkeydown="if(event.key==='Enter')runCompare()">
+    </div>
+    <div id="compareResults" class="flex gap-4">
+      <div class="compare-col" id="compareColA">
+        <div class="font-semibold text-sm mb-3 text-center" id="compareLabelA"></div>
+        <div id="compareGridA" class="space-y-3"></div>
+      </div>
+      <div class="compare-divider"></div>
+      <div class="compare-col" id="compareColB">
+        <div class="font-semibold text-sm mb-3 text-center" id="compareLabelB"></div>
+        <div id="compareGridB" class="space-y-3"></div>
+      </div>
+    </div>
+  </div>
+
+</body>
+
+</html>

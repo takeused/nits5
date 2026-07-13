@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "regions": ["icn1"],
+  "rewrites": [
+    { "source": "/api", "destination": "/api/proxy" },
+    { "source": "/health", "destination": "/api/proxy" },
+    { "source": "/myip", "destination": "/api/proxy" },
+    { "source": "/cerebras", "destination": "/api/proxy" },
+    { "source": "/ntis", "destination": "/api/proxy" },
+    { "source": "/ntis/connection", "destination": "/api/proxy" },
+    { "source": "/ntis/related", "destination": "/api/proxy" },
+    { "source": "/token", "destination": "/api/proxy" },
+    { "source": "/token/probe", "destination": "/api/proxy" },
+    { "source": "/token/refresh", "destination": "/api/proxy" }
+  ]
+}
