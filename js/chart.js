@@ -485,7 +485,7 @@
             datasets: [
               {
                 type: 'bar', label: '특허', data: patentCounts,
-                backgroundColor: years.map((_, i) => i === peakPatentIdx ? 'rgba(71,84,103,0.82)' : 'rgba(152,162,179,0.72)'),
+                backgroundColor: years.map((_, i) => i === peakPatentIdx ? 'rgba(234,88,12,0.92)' : 'rgba(251,146,60,0.8)'),
                 yAxisID: 'y1', order: 2,
               },
               {
@@ -501,7 +501,7 @@
             scales: {
               x: { grid: { color: 'rgba(52,64,84,0.10)' }, ticks: { color: '#667085' } },
               y: { position: 'left', min: 0, suggestedMax: Math.max(...paperCounts)*1.2, grid: { color: 'rgba(52,64,84,0.10)' }, ticks: { color: '#667085' } },
-              y1: { position: 'right', min: 0, suggestedMax: Math.max(...patentCounts)*1.2, grid: { drawOnChartArea: false }, ticks: { color: '#98a2b3' } },
+              y1: { position: 'right', min: 0, suggestedMax: Math.max(...patentCounts)*1.2, grid: { drawOnChartArea: false }, ticks: { color: '#fdba74' } },
             }
           }
         });
