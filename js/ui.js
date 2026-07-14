@@ -3775,7 +3775,9 @@ Respond ONLY with this JSON structure:
     }
 
     function openBudgetModal() {
-      if (!STATE.ntisKey) {
+      // 프록시가 서버 NTIS_API_KEY를 보유하면(ntisConfigured) 브라우저 키 없이도 가능.
+      // 직접 모드이거나 서버에 키가 없을 때만 브라우저 입력 키를 요구한다.
+      if (!STATE.ntisKey && !(PROXY_AVAILABLE && STATE.ntisConfigured)) {
         showToast('NTIS API 인증키가 필요합니다. API 설정에서 입력해주세요.', 'warning');
         return;
       }
@@ -4008,7 +4010,7 @@ Respond ONLY with:
 
     // ── Step 2: NTIS 과제 수집 ──────────────────────────────────
     async function fetchNTISForBudget(keywords, rndPhase, bizSect, displayCnt = 100) {
-      if (!STATE.ntisKey) throw new Error('NTIS API 인증키가 필요합니다. API 설정에서 입력해주세요.');
+      if (!STATE.ntisKey && !(PROXY_AVAILABLE && STATE.ntisConfigured)) throw new Error('NTIS API 인증키가 필요합니다. API 설정에서 입력해주세요.');
 
       // ACTIVE_PROXY='direct'(프록시 미감지) 시에도 Vercel 프록시로 폴백 시도
       // VERCEL_BASE는 Vercel 도메인에서 ''(상대경로), 외부에서는 절대 URL
