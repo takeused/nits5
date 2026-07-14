@@ -192,7 +192,7 @@
         if (proxyBanner) proxyBanner.classList.add('hidden');
       } else if (STATE.clientId && STATE.token && ACTIVE_PROXY === 'vercel') {
         dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
-        text.textContent = 'API + Vercel 프록시 연결됨 (Seoul)';
+        text.textContent = VERCEL_BASE ? 'API + 원격 프록시 연결됨 (터널)' : 'API + Vercel 프록시 연결됨 (Seoul)';
         bar.className = bar.className.replace(/api-status-\w+/g, '').trim() + ' api-status-connected';
         if (proxyBanner) proxyBanner.classList.add('hidden');
       } else if (STATE.clientId && STATE.token && ACTIVE_PROXY === 'worker') {

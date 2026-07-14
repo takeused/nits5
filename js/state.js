@@ -56,8 +56,24 @@
     const API_BASE_DIRECT  = 'https://apigateway.kisti.re.kr/openapicall.do';
     const TOKEN_URL_DIRECT = 'https://apigateway.kisti.re.kr/tokenrequest.do';
 
-    // 외부 프록시 (로컬 전용 운영 시 미사용 — 변수 참조 오류 방지용 선언)
-    const VERCEL_BASE    = '';
+    // 외부 프록시 (터널) — 승인된 PC의 proxy-server.js를 https 터널(ngrok/Cloudflare)로
+    // 노출한 주소. ScienceON/NTIS가 승인된 PC IP를 보게 되어 배포판에서도 검색이 동작한다.
+    // 우선순위: URL 파라미터(?proxy=https://...) > localStorage('sc_proxy_url') > 기본값.
+    // 기본값이 비어 있으면 같은 오리진(Vercel 서버리스 /health·/api …)으로 폴백한다.
+    const TUNNEL_DEFAULT = ''; // 예: 'https://scienceon.ngrok-free.app'
+    const VERCEL_BASE = (() => {
+      const clean = (u) => (u || '').trim().replace(/\/+$/, '');
+      try {
+        const p = new URLSearchParams(location.search).get('proxy');
+        if (p !== null) {
+          const v = clean(p);
+          if (v) { localStorage.setItem('sc_proxy_url', v); return v; }
+          localStorage.removeItem('sc_proxy_url'); // ?proxy= (빈값) → 재설정 해제
+        }
+      } catch { /* location 접근 불가 시 무시 */ }
+      const saved = clean(localStorage.getItem('sc_proxy_url'));
+      return saved || clean(TUNNEL_DEFAULT);
+    })();
     const CF_WORKER_BASE = 'https://YOUR_CF_SUBDOMAIN.workers.dev';
 
     // 현재 활성 프록시 ('local' | 'direct')
