@@ -315,26 +315,26 @@
     }
 
     function hasAIAccess() {
-      return BROWSER_API_MODE
-        ? isValidCerebrasKey(STATE.cerebrasKey)
-        : Boolean(getProxyBase() !== null && STATE.aiConfigured);
+      // 프록시가 서버 CEREBRAS_API_KEY를 보유하면(aiConfigured) 브라우저 키 없이도 사용 가능.
+      // 그 외(직접 모드/서버 키 없음)에는 브라우저 입력 키를 요구한다.
+      if (getProxyBase() !== null && STATE.aiConfigured) return true;
+      return isValidCerebrasKey(STATE.cerebrasKey);
     }
 
-    // AI 인증키는 브라우저에 노출하지 않고 서버 프록시에서만 주입한다.
+    // AI 인증키는 가능하면 서버 프록시에서만 주입한다. 프록시가 서버 키를 보유하면
+    // 프록시(/cerebras)를 경유하고, 그렇지 않으면 브라우저 입력 키로 직접 호출한다.
     async function cerebrasChat(body, timeoutMs = 30000, options = {}) {
       const payload = prepareCerebrasBody(body, options.model);
-      if (BROWSER_API_MODE) {
-        const cerebrasKey = normalizeCerebrasKey(STATE.cerebrasKey);
-        if (!isValidCerebrasKey(cerebrasKey)) throw new Error('AI_KEY_INVALID');
+
+      // 1순위: 프록시가 서버 키 보유 시 프록시 경유 (브라우저에 키 노출 안 함)
+      const proxyBase = getProxyBase();
+      if (proxyBase !== null && STATE.aiConfigured) {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs);
         try {
-          return await fetch('https://api.cerebras.ai/v1/chat/completions', {
+          return await fetch(`${proxyBase}/cerebras`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${cerebrasKey}`,
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
             signal: ctrl.signal,
           });
@@ -342,18 +342,24 @@
           clearTimeout(timer);
         }
       }
-      const proxyBase = getProxyBase();
-      if (proxyBase === null) throw new Error('AI_SERVER_UNAVAILABLE');
+
+      // 2순위: 브라우저 입력 키로 직접 호출 (직접 모드 / 프록시에 키 없음)
+      const cerebrasKey = normalizeCerebrasKey(STATE.cerebrasKey);
+      if (!isValidCerebrasKey(cerebrasKey)) {
+        throw new Error(proxyBase === null ? 'AI_SERVER_UNAVAILABLE' : 'AI_KEY_INVALID');
+      }
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
-        const resp = await fetch(`${proxyBase}/cerebras`, {
+        return await fetch('https://api.cerebras.ai/v1/chat/completions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cerebrasKey}`,
+          },
           body: JSON.stringify(payload),
           signal: ctrl.signal,
         });
-        return resp;
       } finally {
         clearTimeout(timer);
       }
@@ -1306,9 +1312,9 @@ Respond ONLY with this JSON structure:
 
       // AI 서버 환경변수 확인
       if (!hasAIAccess()) {
-        showToast(BROWSER_API_MODE
-          ? '🤖 Cerebras API 키가 비어 있거나 형식이 올바르지 않습니다. csk-로 시작하는 키를 확인해주세요.'
-          : '🤖 AI 서버 설정이 필요합니다. 프록시의 CEREBRAS_API_KEY를 확인해주세요.', 'warning');
+        showToast(getProxyBase() !== null
+          ? '🤖 AI 서버 키가 없습니다. 프록시의 CEREBRAS_API_KEY 또는 API 설정의 csk- 키를 확인해주세요.'
+          : '🤖 Cerebras API 키가 비어 있거나 형식이 올바르지 않습니다. csk-로 시작하는 키를 확인해주세요.', 'warning');
         return;
       }
 
