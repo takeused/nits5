@@ -470,8 +470,8 @@
         if (window._trendChartInstance) window._trendChartInstance.destroy();
         const c = ctx.getContext('2d');
         const paperGrad = c.createLinearGradient(0, 0, 0, 300);
-        paperGrad.addColorStop(0, 'rgba(102,112,133,0.28)');
-        paperGrad.addColorStop(1, 'rgba(152,162,179,0)');
+        paperGrad.addColorStop(0, 'rgba(96,165,250,0.28)');
+        paperGrad.addColorStop(1, 'rgba(96,165,250,0)');
         const yoyLabels = paperCounts.map((n, i) => {
           if (i === 0 || paperCounts[i-1] === 0) return '';
           const r = (n - paperCounts[i-1]) / paperCounts[i-1] * 100;
@@ -490,14 +490,17 @@
               },
               {
                 type: 'line', label: '논문', data: paperCounts,
-                borderColor: '#344054', backgroundColor: paperGrad, borderWidth: 3,
-                pointBackgroundColor: years.map((_, i) => i === peakPaperIdx ? '#344054' : '#667085'),
+                borderColor: '#60a5fa', backgroundColor: paperGrad, borderWidth: 3,
+                pointBackgroundColor: years.map((_, i) => i === peakPaperIdx ? '#3b82f6' : '#60a5fa'),
                 tension: 0.4, fill: true, yAxisID: 'y', order: 1,
               },
             ],
           },
           options: {
             responsive: true, maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+            },
             scales: {
               x: { grid: { color: 'rgba(52,64,84,0.10)' }, ticks: { color: '#667085' } },
               y: { position: 'left', min: 0, suggestedMax: Math.max(...paperCounts)*1.2, grid: { color: 'rgba(52,64,84,0.10)' }, ticks: { color: '#667085' } },
