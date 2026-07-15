@@ -110,12 +110,19 @@
     const minimumForIqr = Number(options.minimumForIqr) || 8;
     if (valid.length < minimumForIqr) return { items: valid, diagnostics };
 
+    // IQR(Interquartile Range, 사분위 범위) 기반 이상치 제거.
+    // 연구비를 오름차순 정렬한 뒤 4등분하여 Q1(하위 25% 지점)·Q3(상위 25% 지점)을 구하고,
+    // IQR = Q3 − Q1 (가운데 50% 데이터가 퍼진 폭)을 계산한다.
+    // 평균은 초대형 국책과제 같은 극단값 하나에 크게 휘둘리지만, IQR은 중앙 50%만 보므로
+    // 그런 이상치에 둔감하다. 아래에서 [Q1 − k·IQR, Q3 + k·IQR] 범위(k=1.5, 표본 급감 시 3)를
+    // 벗어난 과제를 이상치로 제외해 적정 연구비 왜곡을 막는다.
     const values = valid.map(item => positiveNumber(item.annualBudget)).sort((a, b) => a - b);
     const q1 = quantileSorted(values, 0.25);
     const q3 = quantileSorted(values, 0.75);
     const iqr = q3 - q1;
     if (iqr <= 0) return { items: valid, diagnostics: { ...diagnostics, q1, q3 } };
 
+    // 이상치 판정: value가 [Q1 − k·IQR, Q3 + k·IQR] 안에 있으면 유지, 벗어나면 제외.
     const filterWith = multiplier => valid.filter(item => {
       const value = positiveNumber(item.annualBudget);
       return value >= q1 - multiplier * iqr && value <= q3 + multiplier * iqr;
