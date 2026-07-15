@@ -4236,6 +4236,70 @@ Respond ONLY with:
       return allItems;
     }
 
+    // ── Step 2.5: 동일 과제 병합 (연차·공동수행기관 분할 방지) ─────
+    // NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 서로 다른 과제번호를 부여하므로,
+    // 과제번호 기준 중복제거만으로는 같은 과제가 표본에 과다 반영된다.
+    // (정규화 과제명 + 사업명) 복합키로 묶어 1과제=1표본으로 병합하고, 대표 연간 연구비는
+    // "연도별 합산(같은 연도의 공동수행기관 몫을 합산) → 그 연도별 합산액의 중앙값"으로 산출한다.
+    function collapseByProject(items) {
+      if (!Array.isArray(items) || items.length <= 1) return items || [];
+      const normKey = (s) => String(s || '')
+        .replace(/<[^>]*>/g, '')            // HTML 태그 제거
+        .toLowerCase()
+        .replace(/[\s ]+/g, '')        // 공백 제거
+        .replace(/[()[\]{}·,./_+-]/g, '');  // 구분기호 제거
+
+      const groups = new Map();
+      for (const it of items) {
+        const key = normKey(it.projNm) + '||' + normKey(it.biz);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(it);
+      }
+
+      const merged = [];
+      let collapsedCount = 0;
+      for (const group of groups.values()) {
+        if (group.length === 1) { merged.push(group[0]); continue; }
+
+        // 연도별(시작연도 기준) 합산 — 같은 연도의 공동수행기관 몫을 합쳐 과제-연도 총액을 만든다.
+        const yearSum = new Map();
+        for (const it of group) {
+          const b = Number(it.annualBudget) || 0;
+          if (b <= 0) continue;
+          const yr = it.prdStart || '기타';
+          yearSum.set(yr, (yearSum.get(yr) || 0) + b);
+        }
+        const yearTotals = [...yearSum.values()].filter(v => v > 0).sort((a, b) => a - b);
+        const repBudget = yearTotals.length ? Math.round(BudgetCore.quantileSorted(yearTotals, 0.50)) : 0;
+
+        // 표시용 대표 레코드 = 연간 연구비가 가장 큰 멤버. 기간은 그룹 전체 span, 연구비는 대표값으로 덮어쓴다.
+        const base = group.reduce((a, b) => ((Number(b.annualBudget) || 0) > (Number(a.annualBudget) || 0) ? b : a), group[0]);
+        const starts = group.map(g => g.prdStart).filter(Boolean).sort();
+        const ends   = group.map(g => g.prdEnd).filter(Boolean).sort();
+        const mergedStart = starts[0] || base.prdStart;
+        const mergedEnd   = ends[ends.length - 1] || base.prdEnd;
+        const spanYrs = (parseInt(mergedStart) && parseInt(mergedEnd))
+          ? Math.max(1, parseInt(mergedEnd) - parseInt(mergedStart) + 1) : base.projYrs;
+
+        merged.push({
+          ...base,
+          annualBudget: repBudget,
+          budgetSource: 'merged_year_median',
+          prdStart: mergedStart,
+          prdEnd: mergedEnd,
+          projYrs: spanYrs,
+          mergedCount: group.length,
+          mergedYears: yearTotals.length,
+        });
+        collapsedCount += group.length - 1;
+      }
+
+      if (collapsedCount > 0) {
+        addBudgetLog('🧩', `동일 과제 병합: ${items.length}건 → ${merged.length}건 (연차·공동기관 중복 ${collapsedCount}건 통합 · 대표값=연도별 합산액의 중앙값)`);
+      }
+      return merged;
+    }
+
     // ── Step 3: 연간 정규화 + IQR 이상치 제거 ────────────────────
     function normalizeAndClean(items) {
       const result = BudgetCore.cleanBudgetItems(items);
@@ -4550,6 +4614,8 @@ Respond ONLY with:
           ? `<span style="font-size:0.65rem; color:#f59e0b; background:#fffbeb; border:1px solid #fde68a; border-radius:3px; padding:1px 4px; margin-left:4px;">당해연도</span>`
           : String(item.budgetSource || '').includes('period_unknown')
           ? `<span style="font-size:0.65rem; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; border-radius:3px; padding:1px 4px; margin-left:4px;">기간미상 총액</span>`
+          : item.budgetSource === 'merged_year_median'
+          ? `<span title="연차·공동수행기관 ${item.mergedCount}개 레코드를 1개 과제로 병합 — 연간 연구비는 연도별 합산액의 중앙값" style="font-size:0.65rem; color:#7c3aed; background:#f5f3ff; border:1px solid #ddd6fe; border-radius:3px; padding:1px 4px; margin-left:4px;">병합 ${item.mergedCount}건</span>`
           : item.budgetSource === 'government_annualized'
           ? `<span style="font-size:0.65rem; color:#6b7280; background:#f3f4f6; border:1px solid #d1d5db; border-radius:3px; padding:1px 4px; margin-left:4px;">정부연구비 환산</span>`
           : '';
@@ -4660,6 +4726,7 @@ Respond ONLY with:
           <ol>
             <li><strong>수집</strong> — AI 최적화 키워드(+상위 도메인 앵커·과제명 분절 폴백)로 NTIS 과제 수집 (15년 이내 · 과제번호 중복 제거)</li>
             <li><strong>연간 정규화</strong> — 당해연도 연구비 우선, 없으면 총·정부연구비를 실제 수행월수로 연간화 (기간 미상 총액은 저신뢰 표본)</li>
+            <li><strong>동일 과제 병합</strong> — NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 과제번호를 따로 부여해 같은 과제가 과다 반영됩니다. (과제명 + 사업명)으로 묶어 1과제=1표본으로 병합하고, 대표 연간 연구비는 <strong>연도별 합산(같은 연도 공동수행기관 몫 합산)→그 합산액의 중앙값</strong>으로 산출합니다.</li>
             <li><strong>현재가치 보정</strong> — 수행 중간연도 기준 연 ${(BUDGET_ESC_RATE * 100).toFixed(0)}% 상승률로 올해 가치 환산 (최대 ${BUDGET_ESC_CAP}년)</li>
             <li><strong>정제</strong> — 수행기간은 필터로 쓰지 않고 연간 환산에만 사용. 유효 표본 8건 이상일 때 IQR×1.5 이상치 제거(표본 급감 시 ×3 완화) + 관련성 게이트</li>
             <li><strong>AI 유사도 평가</strong> — 연구비를 숨긴 채 기술 55% / 규모·단계 30% / 최신성 15%로 대표 과제 선정</li>
@@ -4961,6 +5028,9 @@ ${'='.repeat(64)}
           document.getElementById('budgetProgressArea').classList.add('hidden');
           return;
         }
+
+        // ── Step 2.5: 동일 과제(연차·공동수행기관 분할) 병합 ─────
+        rawItems = collapseByProject(rawItems);
 
         // ── Step 3: IQR 이상치 제거 ─────────────────────────────
         setBudgetStep(3);
