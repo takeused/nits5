@@ -4239,8 +4239,9 @@ Respond ONLY with:
     // ── Step 2.5: 동일 과제 병합 (연차·공동수행기관 분할 방지) ─────
     // NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 서로 다른 과제번호를 부여하므로,
     // 과제번호 기준 중복제거만으로는 같은 과제가 표본에 과다 반영된다.
-    // (정규화 과제명 + 사업명) 복합키로 묶어 1과제=1표본으로 병합하고, 대표 연간 연구비는
-    // "연도별 합산(같은 연도의 공동수행기관 몫을 합산) → 그 연도별 합산액의 중앙값"으로 산출한다.
+    // 정규화 과제명 키로 묶어 1과제=1표본으로 병합하고(사업명이 달라도 후속 연차·재편성 과제까지
+    // 공격적으로 통합), 대표 연간 연구비는 "연도별 합산(같은 연도의 공동수행기관 몫을 합산) →
+    // 그 연도별 합산액의 중앙값"으로 산출한다. 제목이 같은 서로 다른 과제가 합쳐질 수 있는 위험은 감수한다.
     function collapseByProject(items) {
       if (!Array.isArray(items) || items.length <= 1) return items || [];
       const normKey = (s) => String(s || '')
@@ -4251,7 +4252,7 @@ Respond ONLY with:
 
       const groups = new Map();
       for (const it of items) {
-        const key = normKey(it.projNm) + '||' + normKey(it.biz);
+        const key = normKey(it.projNm);   // 과제명만으로 병합 (사업명 무시)
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(it);
       }
@@ -4726,7 +4727,7 @@ Respond ONLY with:
           <ol>
             <li><strong>수집</strong> — AI 최적화 키워드(+상위 도메인 앵커·과제명 분절 폴백)로 NTIS 과제 수집 (15년 이내 · 과제번호 중복 제거)</li>
             <li><strong>연간 정규화</strong> — 당해연도 연구비 우선, 없으면 총·정부연구비를 실제 수행월수로 연간화 (기간 미상 총액은 저신뢰 표본)</li>
-            <li><strong>동일 과제 병합</strong> — NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 과제번호를 따로 부여해 같은 과제가 과다 반영됩니다. (과제명 + 사업명)으로 묶어 1과제=1표본으로 병합하고, 대표 연간 연구비는 <strong>연도별 합산(같은 연도 공동수행기관 몫 합산)→그 합산액의 중앙값</strong>으로 산출합니다.</li>
+            <li><strong>동일 과제 병합</strong> — NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 과제번호를 따로 부여해 같은 과제가 과다 반영됩니다. <strong>과제명</strong>으로 묶어 1과제=1표본으로 병합하고(후속 연차가 다른 사업으로 편성돼도 통합), 대표 연간 연구비는 <strong>연도별 합산(같은 연도 공동수행기관 몫 합산)→그 합산액의 중앙값</strong>으로 산출합니다.</li>
             <li><strong>현재가치 보정</strong> — 수행 중간연도 기준 연 ${(BUDGET_ESC_RATE * 100).toFixed(0)}% 상승률로 올해 가치 환산 (최대 ${BUDGET_ESC_CAP}년)</li>
             <li><strong>정제</strong> — 수행기간은 필터로 쓰지 않고 연간 환산에만 사용. 유효 표본 8건 이상일 때 IQR×1.5 이상치 제거(표본 급감 시 ×3 완화) + 관련성 게이트</li>
             <li><strong>AI 유사도 평가</strong> — 연구비를 숨긴 채 기술 55% / 규모·단계 30% / 최신성 15%로 대표 과제 선정</li>
