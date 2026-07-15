@@ -468,10 +468,6 @@
         const ctx = document.getElementById('trendChart');
         if (!ctx) return;
         if (window._trendChartInstance) window._trendChartInstance.destroy();
-        const c = ctx.getContext('2d');
-        const paperGrad = c.createLinearGradient(0, 0, 0, 300);
-        paperGrad.addColorStop(0, 'rgba(96,165,250,0.28)');
-        paperGrad.addColorStop(1, 'rgba(96,165,250,0)');
         const yoyLabels = paperCounts.map((n, i) => {
           if (i === 0 || paperCounts[i-1] === 0) return '';
           const r = (n - paperCounts[i-1]) / paperCounts[i-1] * 100;
@@ -490,9 +486,9 @@
               },
               {
                 type: 'line', label: '논문', data: paperCounts,
-                borderColor: '#60a5fa', backgroundColor: paperGrad, borderWidth: 3,
+                borderColor: '#60a5fa', borderWidth: 3,
                 pointBackgroundColor: years.map((_, i) => i === peakPaperIdx ? '#3b82f6' : '#60a5fa'),
-                tension: 0.4, fill: true, yAxisID: 'y', order: 1,
+                tension: 0.4, fill: false, yAxisID: 'y', order: 1,
               },
             ],
           },
