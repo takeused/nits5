@@ -114,6 +114,8 @@
         if (res.ok) {
           const data = await res.json().catch(() => ({}));
           STATE.aiConfigured = data.aiConfigured === true;
+          STATE.cerebrasConfigured = data.cerebrasConfigured;
+          STATE.geminiConfigured = data.geminiConfigured === true;
           STATE.scienceOnConfigured = data.scienceOnConfigured === true;
           STATE.ntisConfigured = data.ntisConfigured === true;
           ACTIVE_PROXY = 'local'; updateProxyStatus(); return;
@@ -126,6 +128,8 @@
         if (res.ok) {
           const data = await res.json().catch(() => ({}));
           STATE.aiConfigured = data.aiConfigured === true;
+          STATE.cerebrasConfigured = data.cerebrasConfigured;
+          STATE.geminiConfigured = data.geminiConfigured === true;
           STATE.scienceOnConfigured = data.scienceOnConfigured === true;
           STATE.ntisConfigured = data.ntisConfigured === true;
           ACTIVE_PROXY = 'vercel'; updateProxyStatus(); return;
@@ -139,6 +143,8 @@
           if (res.ok) {
             const data = await res.json().catch(() => ({}));
             STATE.aiConfigured = data.aiConfigured === true;
+            STATE.cerebrasConfigured = data.cerebrasConfigured;
+            STATE.geminiConfigured = data.geminiConfigured === true;
             STATE.scienceOnConfigured = data.scienceOnConfigured === true;
             STATE.ntisConfigured = data.ntisConfigured === true;
             ACTIVE_PROXY = 'worker'; updateProxyStatus(); return;
@@ -322,25 +328,47 @@
     }
 
     // AI 인증키는 가능하면 서버 프록시에서만 주입한다. 프록시가 서버 키를 보유하면
-    // 프록시(/cerebras)를 경유하고, 그렇지 않으면 브라우저 입력 키로 직접 호출한다.
+    // 프록시를 경유하고, 그렇지 않으면 브라우저 입력 키로 직접 호출한다.
+    // Cerebras가 막히는 환경을 위해 Gemini(/gemini) 대체 경로를 둔다 — Google의
+    // OpenAI 호환 엔드포인트라 응답 형식이 같아 호출부는 수정할 필요가 없다.
     async function cerebrasChat(body, timeoutMs = 30000, options = {}) {
       const payload = prepareCerebrasBody(body, options.model);
 
       // 1순위: 프록시가 서버 키 보유 시 프록시 경유 (브라우저에 키 노출 안 함)
       const proxyBase = getProxyBase();
       if (proxyBase !== null && STATE.aiConfigured) {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-        try {
-          return await fetch(`${proxyBase}/cerebras`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            signal: ctrl.signal,
-          });
-        } finally {
-          clearTimeout(timer);
+        const postTo = async (endpoint) => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+          try {
+            return await fetch(`${proxyBase}${endpoint}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+              signal: ctrl.signal,
+            });
+          } finally {
+            clearTimeout(timer);
+          }
+        };
+
+        // 서버가 어떤 키를 가졌는지 /health로 파악한 값에 따라 시도 순서를 정한다.
+        // (구버전 프록시는 두 플래그가 없으므로 Cerebras를 기본으로 시도)
+        const hasCerebras = STATE.cerebrasConfigured !== false;
+        const hasGemini   = STATE.geminiConfigured === true;
+
+        if (hasCerebras) {
+          try {
+            const resp = await postTo('/cerebras');
+            if (resp.ok || !hasGemini) return resp;
+            console.warn(`[AI] Cerebras 실패(HTTP ${resp.status}) → Gemini로 전환`);
+          } catch (error) {
+            if (!hasGemini) throw error;
+            console.warn('[AI] Cerebras 호출 실패 → Gemini로 전환:', error.message);
+          }
         }
+        if (hasGemini) return postTo('/gemini');
+        return postTo('/cerebras');
       }
 
       // 2순위: 브라우저 입력 키로 직접 호출 (직접 모드 / 프록시에 키 없음)

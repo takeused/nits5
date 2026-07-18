@@ -43,6 +43,8 @@ const PORT      = Number(process.env.PORT || 3737);
 const API_HOST  = 'apigateway.kisti.re.kr';
 const NTIS_HOST = 'www.ntis.go.kr';
 const FIXED_IV  = 'jvHJ1EFA0IXBrxxz';
+// Gemini 모델명은 .env의 GEMINI_MODEL로 덮어쓸 수 있다(모델 개편 시 코드 수정 불필요).
+const GEMINI_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 
 // ── .env 로더 (의존성 없이 KEY=VALUE 파싱, 소스에 비밀값을 넣지 않기 위함) ──
 // 프로젝트 폴더의 .env 파일을 읽어 아직 설정되지 않은 환경변수만 주입한다.
@@ -323,7 +325,10 @@ const server = http.createServer(async (req, res) => {
         status: 'ok',
         service: 'ScienceON Local Proxy',
         port: PORT,
-        aiConfigured: Boolean(process.env.CEREBRAS_API_KEY),
+        aiConfigured: Boolean(process.env.CEREBRAS_API_KEY || process.env.GEMINI_API_KEY),
+        cerebrasConfigured: Boolean(process.env.CEREBRAS_API_KEY),
+        geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+        geminiModel: process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL,
         scienceOnConfigured: Boolean(REGISTERED.clientId && REGISTERED.apiKey && REGISTERED.macAddr),
         ntisConfigured: Boolean(process.env.NTIS_API_KEY),
       });
@@ -338,6 +343,24 @@ const server = http.createServer(async (req, res) => {
       const upstream = await httpsPostJSON('api.cerebras.ai', '/v1/chat/completions', payload, {
         Authorization: `Bearer ${apiKey}`,
       });
+      return sendRaw(res, upstream.status, upstream.body, 'application/json; charset=utf-8');
+    }
+
+    // ── /gemini — Cerebras가 막혔을 때 쓰는 대체 AI 경로.
+    // Google의 OpenAI 호환 엔드포인트를 사용하므로 요청·응답 형식이 /cerebras와 동일해
+    // 프론트엔드는 호출 주소만 바꾸면 된다.
+    if (pathname === '/gemini') {
+      if (req.method !== 'POST') return sendJSON(res, 405, { error: 'POST required' });
+      const apiKey = process.env.GEMINI_API_KEY || '';
+      if (!apiKey) return sendJSON(res, 503, { error: 'GEMINI_API_KEY is not configured on the server' });
+      const payload = await readJSONBody(req);
+      // 모델명은 서버가 정한다(브라우저가 보낸 Cerebras 모델명을 그대로 쓰면 404).
+      payload.model = process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL;
+      delete payload.reasoning_effort;   // Gemini 호환 엔드포인트가 인식하지 못하는 필드
+      const upstream = await httpsPostJSON('generativelanguage.googleapis.com',
+        '/v1beta/openai/chat/completions', payload, {
+          Authorization: `Bearer ${apiKey}`,
+        });
       return sendRaw(res, upstream.status, upstream.body, 'application/json; charset=utf-8');
     }
 

@@ -13,6 +13,8 @@
       cerebrasKey: '',
       aiModelMode: localStorage.getItem('sc_ai_model_mode') || 'zai-glm-4.7',
       aiConfigured: false,
+      cerebrasConfigured: undefined,  // /health 미제공(구버전 프록시) 시 undefined → Cerebras 시도
+      geminiConfigured: false,
       scienceOnConfigured: false,
       ntisConfigured: false,
       currentTarget: 'ARTI',

@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const API_HOST = 'apigateway.kisti.re.kr';
 const NTIS_HOST = 'www.ntis.go.kr';
 const FIXED_IV = 'jvHJ1EFA0IXBrxxz';
+// Gemini 모델명은 환경변수 GEMINI_MODEL로 덮어쓸 수 있다(모델 개편 시 코드 수정 불필요).
+const GEMINI_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 
 function aesEncryptOfficial(plaintext, keyStr) {
   const key = Buffer.from(keyStr, 'utf8');
@@ -134,7 +136,10 @@ module.exports = async (req, res) => {
     return jsonRes(res, 200, {
       status: 'ok',
       service: 'ScienceON + NTIS Vercel Proxy (Seoul Region)',
-      aiConfigured: Boolean(process.env.CEREBRAS_API_KEY),
+      aiConfigured: Boolean(process.env.CEREBRAS_API_KEY || process.env.GEMINI_API_KEY),
+      cerebrasConfigured: Boolean(process.env.CEREBRAS_API_KEY),
+      geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+      geminiModel: process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL,
       scienceOnConfigured: Boolean(process.env.SC_CLIENT_ID && process.env.SC_API_KEY && process.env.SC_MAC_ADDR),
       ntisConfigured: Boolean(process.env.NTIS_API_KEY),
     });
@@ -149,6 +154,30 @@ module.exports = async (req, res) => {
       const result = await httpsPostJSON('api.cerebras.ai', '/v1/chat/completions', req.body || {}, {
         Authorization: `Bearer ${apiKey}`,
       });
+      setCORS(res);
+      setNoCache(res);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.status(result.status).send(result.body);
+    } catch (e) {
+      return jsonRes(res, 502, { error: e.message });
+    }
+  }
+
+  // ── /gemini — Cerebras가 막혔을 때 쓰는 대체 AI 경로.
+  // Google의 OpenAI 호환 엔드포인트라 요청·응답 형식이 /cerebras와 동일하다.
+  if (pathname === '/gemini') {
+    if (req.method !== 'POST') return jsonRes(res, 405, { error: 'POST required' });
+    const apiKey = process.env.GEMINI_API_KEY || '';
+    if (!apiKey) return jsonRes(res, 503, { error: 'GEMINI_API_KEY is not configured on the server' });
+    try {
+      const payload = { ...(req.body || {}) };
+      // 모델명은 서버가 정한다(브라우저가 보낸 Cerebras 모델명을 그대로 쓰면 404).
+      payload.model = process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL;
+      delete payload.reasoning_effort;   // Gemini 호환 엔드포인트가 인식하지 못하는 필드
+      const result = await httpsPostJSON('generativelanguage.googleapis.com',
+        '/v1beta/openai/chat/completions', payload, {
+          Authorization: `Bearer ${apiKey}`,
+        });
       setCORS(res);
       setNoCache(res);
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
