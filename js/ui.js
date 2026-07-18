@@ -327,10 +327,84 @@
       return isValidCerebrasKey(STATE.cerebrasKey);
     }
 
+    // ── Gemini 사용 동의 ────────────────────────────────────────────
+    // 대체 AI(Gemini)를 쓰면 검색어·논문 제목 등 분석 입력이 Google 서버로 전송되므로
+    // 자동 전환하지 않고 최초 사용 시 명시적 승인을 받는다.
+    // 승인은 localStorage에 저장(다음 방문에 재질문 없음), 거부는 세션 한정
+    // (거부가 영구 고정되어 다음 방문에 AI를 아예 못 쓰는 상황을 피한다).
+    let _geminiConsentSession = null;   // 'granted' | 'denied' | null
+    let _geminiConsentPending = null;   // 동시 호출이 모달을 여러 개 띄우지 않도록 공유
+
+    function geminiConsentState() {
+      if (_geminiConsentSession) return _geminiConsentSession;
+      return localStorage.getItem('sc_gemini_consent') === 'granted' ? 'granted' : null;
+    }
+
+    function resetGeminiConsent() {
+      _geminiConsentSession = null;
+      localStorage.removeItem('sc_gemini_consent');
+      showToast('Gemini 사용 승인을 초기화했습니다. 다음 사용 시 다시 확인합니다.', 'info');
+    }
+
+    async function ensureGeminiConsent() {
+      const known = geminiConsentState();
+      if (known === 'granted') return true;
+      if (known === 'denied') return false;
+      if (_geminiConsentPending) return _geminiConsentPending;
+      _geminiConsentPending = showGeminiConsentDialog().then(approved => {
+        _geminiConsentSession = approved ? 'granted' : 'denied';
+        if (approved) localStorage.setItem('sc_gemini_consent', 'granted');
+        _geminiConsentPending = null;
+        return approved;
+      });
+      return _geminiConsentPending;
+    }
+
+    function showGeminiConsentDialog() {
+      return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+        overlay.innerHTML = `
+          <div role="dialog" aria-modal="true" aria-labelledby="geminiConsentTitle"
+               style="background:#fff;border-radius:14px;max-width:420px;width:100%;padding:22px 24px;box-shadow:0 20px 50px rgba(0,0,0,0.25);">
+            <p id="geminiConsentTitle" style="font-size:15px;font-weight:800;color:#111;margin:0 0 10px;">🤖 대체 AI(Gemini) 사용 승인</p>
+            <p style="font-size:12.5px;color:#374151;line-height:1.65;margin:0 0 10px;">
+              기본 AI(Cerebras)를 사용할 수 없습니다. 계속하려면 <strong>Google Gemini</strong>로 전환해야 합니다.
+            </p>
+            <p style="font-size:12px;color:#6b7280;line-height:1.6;margin:0 0 14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;">
+              승인하면 분석 입력(검색어, 조회된 논문·특허 제목 등)이 <strong>Google 서버로 전송</strong>됩니다.
+              승인 여부는 이 브라우저에 저장되며, 거부하면 AI 단계는 실행되지 않습니다.
+            </p>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+              <button type="button" data-act="deny"
+                style="padding:8px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;color:#374151;font-size:12.5px;font-weight:600;cursor:pointer;">사용 안 함</button>
+              <button type="button" data-act="allow"
+                style="padding:8px 14px;border-radius:8px;border:1px solid #111;background:#111;color:#fff;font-size:12.5px;font-weight:700;cursor:pointer;">승인하고 계속</button>
+            </div>
+          </div>`;
+        const finish = (approved) => {
+          document.removeEventListener('keydown', onKey);
+          overlay.remove();
+          resolve(approved);
+        };
+        const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+        overlay.addEventListener('click', (e) => {
+          const act = e.target.closest('button')?.dataset.act;
+          if (act === 'allow') finish(true);
+          else if (act === 'deny') finish(false);
+          else if (e.target === overlay) finish(false);
+        });
+        document.addEventListener('keydown', onKey);
+        document.body.appendChild(overlay);
+        overlay.querySelector('[data-act="allow"]')?.focus();
+      });
+    }
+
     // AI 인증키는 가능하면 서버 프록시에서만 주입한다. 프록시가 서버 키를 보유하면
     // 프록시를 경유하고, 그렇지 않으면 브라우저 입력 키로 직접 호출한다.
     // Cerebras가 막히는 환경을 위해 Gemini(/gemini) 대체 경로를 둔다 — Google의
     // OpenAI 호환 엔드포인트라 응답 형식이 같아 호출부는 수정할 필요가 없다.
+    // 단, Gemini 전환은 사용자 승인을 받은 뒤에만 수행한다.
     async function cerebrasChat(body, timeoutMs = 30000, options = {}) {
       const payload = prepareCerebrasBody(body, options.model);
 
@@ -361,13 +435,21 @@
           try {
             const resp = await postTo('/cerebras');
             if (resp.ok || !hasGemini) return resp;
-            console.warn(`[AI] Cerebras 실패(HTTP ${resp.status}) → Gemini로 전환`);
+            // 승인받지 못하면 전환하지 않고 원래 실패 응답을 그대로 돌려준다.
+            if (!await ensureGeminiConsent()) return resp;
+            console.warn(`[AI] Cerebras 실패(HTTP ${resp.status}) → 승인됨, Gemini로 전환`);
           } catch (error) {
             if (!hasGemini) throw error;
-            console.warn('[AI] Cerebras 호출 실패 → Gemini로 전환:', error.message);
+            if (!await ensureGeminiConsent()) throw error;
+            console.warn('[AI] Cerebras 호출 실패 → 승인됨, Gemini로 전환:', error.message);
           }
+          return postTo('/gemini');
         }
-        if (hasGemini) return postTo('/gemini');
+        if (hasGemini) {
+          // Cerebras 키가 아예 없는 경우 — Gemini가 유일한 경로여도 승인은 받는다.
+          if (!await ensureGeminiConsent()) throw new Error('GEMINI_CONSENT_DECLINED');
+          return postTo('/gemini');
+        }
         return postTo('/cerebras');
       }
 
@@ -1507,7 +1589,9 @@ Respond ONLY with this JSON structure:
         } catch (err) {
           console.error('[Cerebras]', err);
           if (err.message === 'AI_SERVER_UNAVAILABLE') {
-            showToast('AI 서버 설정을 확인해주세요 (CEREBRAS_API_KEY)', 'warning');
+            showToast('AI 서버 설정을 확인해주세요 (CEREBRAS_API_KEY 또는 GEMINI_API_KEY)', 'warning');
+          } else if (err.message === 'GEMINI_CONSENT_DECLINED') {
+            showToast('Gemini 사용을 승인하지 않아 AI 분석을 중단했습니다.', 'warning');
           } else {
             showToast('AI 키워드 생성 실패: ' + err.message, 'error');
           }
