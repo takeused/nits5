@@ -956,24 +956,31 @@
         } catch { return null; }
       };
 
+      // 테마의 근거를 넓히기 위해 상위 5건이 아니라 논문 40건·특허 30건을 수집한다.
+      // 상위 5건 제목만으로는 도메인 연구 지형을 대표하지 못해 AI가 사전지식으로
+      // 테마를 "창작"하게 되므로, 제목·저자키워드·IPC의 실측 빈도를 함께 뽑는다.
       const [artiXml, patentXml] = await Promise.all([
-        fetchTop('ARTI', 5),
-        fetchTop('PATENT', 5),
+        fetchTop('ARTI', 40),
+        fetchTop('PATENT', 30),
       ]);
 
-      const extractItems = (xml) => {
+      const extractItems = (xml, n) => {
         if (!xml) return [];
-        return Array.from(xml.querySelectorAll('recordList record, record')).slice(0, 5);
+        return Array.from(xml.querySelectorAll('recordList record, record')).slice(0, n);
       };
 
-      const paperSummaries = extractItems(artiXml).map(item => {
+      const paperItems  = extractItems(artiXml, 40);
+      const patentItems = extractItems(patentXml, 30);
+
+      // 대표 사례 블록(상위 5건)은 기존 형식 유지
+      const paperSummaries = paperItems.slice(0, 5).map(item => {
         const title   = getVal(item, 'Title') || '';
         const authors = (getVal(item, 'Author') || '').split(/[;,|]/)[0].trim();
         const year    = (getVal(item, 'Pubyear', 'PublDate') || '').substring(0, 4);
         return `"${title}"${authors ? ' — ' + authors : ''}${year ? ' (' + year + ')' : ''}`;
       }).filter(Boolean);
 
-      const patentSummaries = extractItems(patentXml).map(item => {
+      const patentSummaries = patentItems.slice(0, 5).map(item => {
         const title     = getVal(item, 'Title') || '';
         const applicant = (getVal(item, 'Publisher', 'Applicants') || '').split(/[;|,]/)[0].trim();
         const ipc       = getVal(item, 'IPC') || '';
@@ -981,7 +988,70 @@
         return `"${title}"${applicant ? ' — ' + applicant : ''}${ipc ? ' [' + ipc.split(/[,;]/)[0].trim() + ']' : ''}${year ? ' (' + year + ')' : ''}`;
       }).filter(Boolean);
 
-      return { paperSummaries, patentSummaries };
+      // ── 관측 용어 빈도 테이블 — 테마가 이 목록에 근거하도록 강제하는 재료 ──
+      const paperTitles  = paperItems.map(it => getVal(it, 'Title') || '').filter(Boolean);
+      const patentTitles = patentItems.map(it => getVal(it, 'Title') || '').filter(Boolean);
+      const authorKeywords = paperItems
+        .flatMap(it => (getVal(it, 'Keyword', 'Keywords') || '').split(/[;,|]/))
+        .map(k => k.trim()).filter(k => k.length >= 2);
+
+      const termFrequency = buildTermFrequency(
+        [...paperTitles, ...patentTitles, ...authorKeywords.join(' ')], mainQuery);
+
+      // IPC 서브클래스(앞 4자리) 분포 — 특허측 기술 구조의 객관 근거
+      const ipcCounts = new Map();
+      patentItems.forEach(it => {
+        (getVal(it, 'IPC') || '').split(/[,;]/).forEach(code => {
+          const sub = code.trim().substring(0, 4).toUpperCase();
+          if (/^[A-H]\d\d[A-Z]$/.test(sub)) ipcCounts.set(sub, (ipcCounts.get(sub) || 0) + 1);
+        });
+      });
+      const ipcDistribution = [...ipcCounts.entries()]
+        .sort((a, b) => b[1] - a[1]).slice(0, 8)
+        .map(([code, count]) => `${code}(${count})`);
+
+      return {
+        paperSummaries, patentSummaries, termFrequency, ipcDistribution,
+        paperCount: paperItems.length, patentCount: patentItems.length,
+      };
+    }
+
+    // 제목·저자키워드 텍스트에서 유니그램/바이그램 빈도를 계산해 상위 용어를 반환한다.
+    // 메인 키워드 자체와 범용 접미어는 제외해 "새 정보"만 남긴다.
+    function buildTermFrequency(texts, mainQuery, topN = 25) {
+      const stop = new Set(['연구', '개발', '분석', '기반', '기술', '시스템', '방법', '방안', '위한',
+        '이용한', '이용', '활용한', '활용', '적용', '관한', '대한', '따른', '통한', '및', '등',
+        '동향', '현황', '사례', '평가', '설계', '구현', '제안', '개선', '향상', '효과', '특성',
+        'the', 'of', 'and', 'for', 'a', 'an', 'on', 'in', 'with', 'using', 'based', 'study']);
+      const mainTokens = new Set(String(mainQuery || '').toLowerCase().split(/\s+/).filter(Boolean));
+      const uni = new Map();
+      const bi = new Map();
+      for (const text of texts) {
+        const tokens = String(text || '')
+          .replace(/<[^>]*>/g, ' ')
+          .split(/[\s.,;:()\[\]{}/·ㆍ&+\-_'"“”‘’?!]+/)
+          .map(t => t.trim().toLowerCase())
+          .filter(t => t.length >= 2 && !stop.has(t) && !mainTokens.has(t) && !/^\d+$/.test(t));
+        tokens.forEach((t, i) => {
+          uni.set(t, (uni.get(t) || 0) + 1);
+          if (i < tokens.length - 1) {
+            const pair = `${t} ${tokens[i + 1]}`;
+            bi.set(pair, (bi.get(pair) || 0) + 1);
+          }
+        });
+      }
+      // 바이그램(2회 이상)을 우선하고 유니그램으로 보충 — 구체적 기술명 우선
+      const bigrams  = [...bi.entries()].filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
+      const unigrams = [...uni.entries()].filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]);
+      const seen = new Set();
+      const result = [];
+      for (const [term, count] of [...bigrams, ...unigrams]) {
+        if (result.length >= topN) break;
+        if (seen.has(term)) continue;
+        seen.add(term);
+        result.push(`${term}(${count})`);
+      }
+      return result;
     }
 
     // LLM이 살짝 깨진 JSON(배열 요소 사이 콤마 누락·후행 콤마 등)을 줄 때 대비한
@@ -1007,7 +1077,8 @@
     async function fetchSubKeywords(mainQuery, domainContext) {
       if (!hasAIAccess()) throw new Error('AI_SERVER_UNAVAILABLE');
 
-      const { paperSummaries, patentSummaries } = domainContext;
+      const { paperSummaries, patentSummaries, termFrequency = [], ipcDistribution = [],
+              paperCount = 0, patentCount = 0 } = domainContext;
 
       const paperBlock  = paperSummaries.length
         ? paperSummaries.map((p, i) => `${i+1}. ${p}`).join('\n')
@@ -1017,26 +1088,45 @@
         ? patentSummaries.map((p, i) => `${i+1}. ${p}`).join('\n')
         : '(No patent data available — this may indicate a near-complete white space)';
 
+      const termBlock = termFrequency.length
+        ? termFrequency.join(', ')
+        : '(no term statistics available)';
+
+      const ipcBlock = ipcDistribution.length
+        ? ipcDistribution.join(', ')
+        : '(no IPC data)';
+
       const systemPrompt = `You are a technology commercialization (기술사업화) strategist and patent analyst.
 You specialize in proposing testable "white space" hypotheses: sub-domains that may have strong academic research but relatively limited patent coverage.
 You ALWAYS respond with valid JSON only. No markdown, no explanation outside the JSON.`;
 
       const userPrompt = `Analyze the following real data for the main research keyword: "${mainQuery}"
 
-=== ACTUAL TOP PAPERS (from ScienceON database) ===
+=== OBSERVED TERM FREQUENCY (from ${paperCount} papers + ${patentCount} patents: titles + author keywords, format: term(count)) ===
+${termBlock}
+
+=== PATENT IPC SUBCLASS DISTRIBUTION (from ${patentCount} patents, format: IPC(count)) ===
+${ipcBlock}
+
+=== SAMPLE TOP PAPERS (from ScienceON database) ===
 ${paperBlock}
 
-=== ACTUAL TOP PATENTS (from ScienceON database) ===
+=== SAMPLE TOP PATENTS (from ScienceON database) ===
 ${patentBlock}
 
 Perform this 3-step analysis:
 
-STEP 1 — Identify 5 to 8 core research themes from the papers above (aim for 6-7). Write each "theme" in KOREAN (3-6 words) as a concrete TECHNOLOGY name.
+STEP 1 — Identify 5 to 8 core research themes GROUNDED IN THE OBSERVED DATA above (aim for 6-7). Write each "theme" in KOREAN (3-6 words) as a concrete TECHNOLOGY name.
+  - CRITICAL GROUNDING RULE: every theme MUST be supported by the observed term frequency table and/or the sample titles.
+    For each theme, fill "evidence" with 2-4 EXACT terms copied from the frequency table (or title phrases) that support it.
+    Do NOT invent themes from your own prior knowledge that have no supporting observed terms.
   - Do NOT append meta/filler suffixes like "동향", "트렌드", "현황", "연구", "분석" (trend/status/research/analysis).
     Name the technology itself. Example: write "자율 주행 차량 기술" NOT "자율 주행 차량 기술 동향".
   For each theme, provide a Korean "hypothesis" (1 sentence) explaining why it may merit a research-to-IP gap check. This is only a hypothesis: do not claim that a theme is a verified patent gap.
 
-STEP 2 — From all commercializable themes, generate 6 to 8 sub-keywords. Cover as many distinct themes as possible; do not filter a theme out only because of an AI gap judgement.
+STEP 2 — From all commercializable themes, generate 8 to 10 sub-keywords. Cover as many distinct themes as possible; do not filter a theme out only because of an AI gap judgement.
+  (More candidates than needed are requested on purpose — they will be pruned later by actual database counts.)
+  - Prefer keywords built from terms that actually appear in the observed frequency table: these match the database vocabulary and return real search results.
   - IMPORTANT: Write BOTH "keyword" and "patent_query" in KOREAN. The search targets are Korean databases
     (ScienceON papers, Korean patents), so English terms return almost no matches. Use Korean technical terms.
   - "keyword": 2-3 Korean words — specific enough to distinguish sub-domains, used for PAPER search.
@@ -1068,7 +1158,7 @@ STEP 3 — For each candidate, provide:
 Respond ONLY with this JSON structure:
 {
   "themes": [
-    {"theme": "...", "hypothesis": "..."}
+    {"theme": "...", "hypothesis": "...", "evidence": ["term1", "term2"]}
   ],
   "candidates": [
     {"theme": "...", "keyword": "...", "patent_query": "...", "search_terms": ["..."], "gap_reason": "...", "target_market": "..."}
@@ -1082,7 +1172,9 @@ Respond ONLY with this JSON structure:
           { role: 'system', content: systemPrompt },
           { role: 'user',   content: userPrompt   },
         ],
-        temperature: 0.6,
+        // 관측 데이터 요약이 목적이므로 낮은 온도로 재현성을 확보한다.
+        // (높은 온도는 실행마다 전혀 다른 테마를 만들어 임의성의 주범이었음)
+        temperature: 0.2,
         max_tokens: 8000,
       };
 
@@ -1116,7 +1208,7 @@ Respond ONLY with this JSON structure:
       const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
       if (candidates.length < 1) throw new Error('후보 키워드 배열이 비어 있습니다');
 
-      const mappedCandidates = candidates.slice(0, 8).map(c => ({
+      const mappedCandidates = candidates.slice(0, 12).map(c => ({
         theme:        stripThemeSuffix(c.theme || '').trim(),
         keyword:      (c.keyword     || '').trim(),
         patent_query: (c.patent_query || '').trim(),
@@ -1125,10 +1217,13 @@ Respond ONLY with this JSON structure:
         target_market:(c.target_market || '').trim(),
       })).filter(c => c.keyword);
 
-      // 테마를 먼저 정제하고 비사업화 여부 판정
+      // 테마를 먼저 정제하고 비사업화 여부 판정 (evidence = 관측 데이터 근거 용어)
       const mappedThemes = themes.map(t => {
         const cleaned = stripThemeSuffix(t.theme || t.keyword || '');
-        return { ...t, theme: cleaned, nonCommercial: isNonCommercialTopic(cleaned) };
+        const evidence = Array.isArray(t.evidence)
+          ? t.evidence.map(e => String(e || '').trim()).filter(Boolean).slice(0, 4)
+          : [];
+        return { ...t, theme: cleaned, evidence, nonCommercial: isNonCommercialTopic(cleaned) };
       });
       const nonCommercialThemes = mappedThemes.filter(t => t.nonCommercial).map(t => t.theme);
 
@@ -1144,7 +1239,8 @@ Respond ONLY with this JSON structure:
 
       const commercializable = mappedCandidates.filter(c => !isCandidateNonCommercial(c.keyword));
       if (!commercializable.length) throw new Error('특허·제품화 가능한 기술 후보를 생성하지 못했습니다');
-      const finalCandidates = commercializable.slice(0, 6);
+      // 과생성분(최대 10개)을 그대로 넘긴다 — 최종 6개 선별은 실측 프로브가 결정한다.
+      const finalCandidates = commercializable.slice(0, 10);
 
       return {
         themes: mappedThemes,
@@ -1178,9 +1274,9 @@ Respond ONLY with this JSON structure:
         if (!isNonCommercialTopic(`${c.theme} ${c.keyword}`)) score += 1;
         return sum + score;
       }, 0);
-      const targetCountScore = candidates.length >= 6 && candidates.length <= 8
+      const targetCountScore = candidates.length >= 8 && candidates.length <= 10
         ? 18
-        : Math.max(0, 18 - Math.abs(6 - candidates.length) * 4);
+        : Math.max(0, 18 - Math.abs(8 - candidates.length) * 4);
       const diversityScore = Math.min(18, uniqueKeywords * 2 + uniqueThemes * 2);
       const themeScore = Math.min(12, themes.filter(t => hasKorean(t.theme || t.keyword)).length * 2);
       const fieldScore = Math.min(32, candidateShape);
@@ -1391,7 +1487,17 @@ Respond ONLY with this JSON structure:
           return;
         }
 
-        const { themes, candidates, modelExperiment } = aiResult;
+        const { themes, candidates: overGenerated, modelExperiment } = aiResult;
+
+        // ── Stage 2.5: 실측 프로브로 후보 선별 ────────────────────
+        // AI가 과생성한 후보(최대 10개)의 논문 건수를 가볍게 조회해,
+        // DB에 데이터가 실제로 존재하는 6개만 본검증에 올린다.
+        // 최종 후보 구성을 AI 선택이 아니라 실측이 결정하게 하는 장치다.
+        const candidates = await probeAndSelectCandidates(overGenerated, 6);
+        if (candidates.length < overGenerated.length) {
+          console.log(`[TechCommerce] 실측 프로브 선별: ${overGenerated.length}개 → ${candidates.length}개`,
+            candidates.map(c => c.keyword));
+        }
 
         // ── Stage 3: 후보 실데이터 검증 ──────────────────────────
         setAnalysisProgress(STAGES, 2);
@@ -1607,6 +1713,52 @@ Respond ONLY with this JSON structure:
         })();
       }
       return _tokenRefreshPromise;
+    }
+
+    // ── Stage 2.5: 과생성 후보를 실측 건수로 선별 ──────────────────
+    // 후보 keyword의 ARTI 건수만 가볍게 조회(rowCount=1)해 데이터가 존재하는 후보를
+    // 우선 선발한다. 우선순위: 논문 20건 이상(정식 기준 충족 가능) > 5~19건(탐색 가능)
+    // > 나머지(0건·오류). 같은 등급 안에서는 AI 제안 순서를 유지해 다양성을 보존한다.
+    async function probeAndSelectCandidates(candidates, limit = 6) {
+      const list = Array.isArray(candidates) ? candidates : [];
+      if (list.length <= limit) return list;
+
+      const quickArtiCount = async (kw) => {
+        const attempt = async () => {
+          const q = JSON.stringify({ BI: kw });
+          const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=ARTI&searchQuery=${encodeURIComponent(q)}&rowCount=1`;
+          const resp = await fetchWithRetry429(url, { timeout: 8000 });
+          if (!resp.ok) return { count: null };
+          const xml = new DOMParser().parseFromString(await resp.text(), 'text/xml');
+          if (xml.querySelector('parsererror')) return { count: null };
+          const errorCode = xml.querySelector('errorCode')?.textContent?.trim();
+          if (errorCode) return { errorCode, count: null };
+          const el = xml.querySelector('TotalCount') || xml.querySelector('totalCount');
+          return { count: parseInt(el?.textContent, 10) || 0 };
+        };
+        try {
+          let out = await attempt();
+          if (out.errorCode === 'E4103') {   // 토큰 만료 → 갱신 후 1회 재시도
+            await refreshTokenOnce();
+            out = await attempt();
+          }
+          return out.count;                  // null = 조회 실패(판단 보류)
+        } catch { return null; }
+      };
+
+      const probed = await mapWithConcurrency(list, 2, async (c) => ({
+        candidate: c,
+        count: await quickArtiCount(c.keyword),
+      }));
+
+      const tier = ({ count }) => (count === null ? 1 : count >= 20 ? 3 : count >= 5 ? 2 : count > 0 ? 1 : 0);
+      const selected = probed
+        .map((p, order) => ({ ...p, order }))
+        .sort((a, b) => tier(b) - tier(a) || a.order - b.order)  // 등급 우선, 동급은 AI 순서
+        .slice(0, limit)
+        .sort((a, b) => a.order - b.order)                        // 표시 순서는 원래대로
+        .map(p => ({ ...p.candidate, probedArtiCount: p.count }));
+      return selected;
     }
 
     // 후보별 최근 완결 2년과 그 이전 2년을 동적으로 비교한다.
@@ -1879,7 +2031,7 @@ Respond ONLY with this JSON structure:
             <span style="font-size:15px;">🧠</span> Step 1 — AI 도메인 세부 기술 테마 (${themes.length}개)
             <span style="font-size:11px;font-weight:500;color:#9ca3af;">▼ 펼치기/접기</span>
           </summary>
-          <p style="font-size:11px;color:#9ca3af;margin:6px 0 10px 0;">AI가 제안한 세부 기술 테마와 검증 가설입니다. 공백 여부는 이 단계에서 확정하지 않으며, 후보별 동일 검색 범위의 실측 데이터로 다음 단계에서 검증합니다.</p>
+          <p style="font-size:11px;color:#9ca3af;margin:6px 0 10px 0;">실제 논문·특허 표본(제목·저자키워드·IPC)의 용어 빈도에 근거해 AI가 요약한 세부 기술 테마와 검증 가설입니다. 각 테마의 "근거 용어"는 관측 데이터에서 인용된 것입니다. 공백 여부는 이 단계에서 확정하지 않으며, 후보별 동일 검색 범위의 실측 데이터로 다음 단계에서 검증합니다.</p>
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;">
             ${themes.map((t, i) => {
               const isNonComm = t.nonCommercial;
@@ -1896,6 +2048,7 @@ Respond ONLY with this JSON structure:
                   <span style="font-weight:700;color:${color};white-space:nowrap;">${badge}</span>
                 </div>
                 ${isNonComm ? '<p style="color:#9ca3af;margin:0;line-height:1.4;">정책·제도·법률 등 특허/제품화가 어려운 영역으로 점수 산출에서 제외됩니다.</p>' : ((t.hypothesis || t.reason) ? `<p style="color:#6b7280;margin:0;line-height:1.4;">${escHtml(t.hypothesis || t.reason)}</p>` : '')}
+                ${!isNonComm && Array.isArray(t.evidence) && t.evidence.length ? `<p style="color:#9ca3af;margin:4px 0 0;font-size:10px;line-height:1.4;">근거 용어: ${t.evidence.map(e => escHtml(e)).join(' · ')}</p>` : ''}
               </div>`;
             }).join('')}
           </div>
