@@ -937,11 +937,22 @@
     async function fetchDomainContext(mainQuery) {
       const fetchTop = async (target, n) => {
         const searchQuery = JSON.stringify({ BI: mainQuery });
-        const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${n}`;
-        try {
+        // 토큰은 매 시도마다 STATE에서 다시 읽는다(갱신 후 재시도에 새 토큰이 반영되도록).
+        const attempt = async () => {
+          const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${n}`;
           const resp = await fetchWithRetry429(url, { timeout: 8000 });
           const text = await resp.text();
-          return new DOMParser().parseFromString(text, 'text/xml');
+          const xml = new DOMParser().parseFromString(text, 'text/xml');
+          const errorCode = xml.querySelector('parsererror') ? '' : xml.querySelector('errorCode')?.textContent?.trim();
+          return { xml, errorCode };
+        };
+        try {
+          let out = await attempt();
+          if (out.errorCode === 'E4103') {   // 토큰 만료 → 갱신 후 1회 재시도
+            await refreshTokenOnce();
+            out = await attempt();
+          }
+          return out.xml;
         } catch { return null; }
       };
 
@@ -1420,19 +1431,28 @@ Respond ONLY with this JSON structure:
       const getItems = (xml, n) => Array.from(xml?.querySelectorAll('recordList record, record') || []).slice(0, n);
 
       const fetchScienceON = async (target, query, rowCount = 1) => {
-        try {
+        // 토큰은 매 시도마다 STATE에서 다시 읽는다(갱신 후 재시도에 새 토큰이 반영되도록).
+        const attempt = async () => {
           const searchQuery = JSON.stringify({ BI: query });
           const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${rowCount}`;
           const resp = await fetchWithRetry429(url, { timeout: 10000 });
           const text = await resp.text();
-          if (!resp.ok) return { xml: null, metric: metric(0, 'error', { error: `HTTP ${resp.status}` }) };
+          if (!resp.ok) return { result: { xml: null, metric: metric(0, 'error', { error: `HTTP ${resp.status}` }) } };
           const xml = new DOMParser().parseFromString(text, 'text/xml');
-          if (xml.querySelector('parsererror')) return { xml: null, metric: metric(0, 'error', { error: 'XML parse error' }) };
+          if (xml.querySelector('parsererror')) return { result: { xml: null, metric: metric(0, 'error', { error: 'XML parse error' }) } };
           const errorCode = xml.querySelector('errorCode')?.textContent?.trim();
-          if (errorCode) return { xml, metric: metric(0, 'error', { error: errorCode }) };
+          if (errorCode) return { errorCode, result: { xml, metric: metric(0, 'error', { error: errorCode }) } };
           const el = xml.querySelector('TotalCount') || xml.querySelector('totalCount');
           const value = parseInt(el?.textContent, 10) || 0;
-          return { xml, metric: metric(value, value > 0 ? 'ok' : 'no_result') };
+          return { result: { xml, metric: metric(value, value > 0 ? 'ok' : 'no_result') } };
+        };
+        try {
+          let out = await attempt();
+          if (out.errorCode === 'E4103') {   // 토큰 만료 → 갱신 후 1회 재시도
+            await refreshTokenOnce();
+            out = await attempt();
+          }
+          return out.result;
         } catch (error) {
           return { xml: null, metric: metric(0, 'error', { error: error.name || 'request failed' }) };
         }
@@ -1558,19 +1578,47 @@ Respond ONLY with this JSON structure:
       return lastResp;
     }
 
+    // ScienceON 토큰이 분석 도중 만료되면 이후 호출이 모두 E4103으로 실패해 후보가
+    // "핵심 데이터 조회 오류"로 부당하게 탈락한다. 만료를 감지하면 토큰을 갱신하고 재시도한다.
+    // 동시 호출이 각자 갱신을 트리거하지 않도록 진행 중인 갱신 하나를 공유한다.
+    let _tokenRefreshPromise = null;
+    async function refreshTokenOnce() {
+      if (!_tokenRefreshPromise) {
+        _tokenRefreshPromise = (async () => {
+          try {
+            if (typeof autoRequestToken === 'function') await autoRequestToken();
+          } finally {
+            setTimeout(() => { _tokenRefreshPromise = null; }, 1000);
+          }
+        })();
+      }
+      return _tokenRefreshPromise;
+    }
+
     // 후보별 최근 완결 2년과 그 이전 2년을 동적으로 비교한다.
     async function fetchTrendSignals(candidates) {
       const fetchYearCount = async (kw, year) => {
         const q = JSON.stringify({ BI: kw, PY: String(year) });
-        const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=ARTI&searchQuery=${encodeURIComponent(q)}&rowCount=1`;
-        try {
+        // 토큰은 매 시도마다 STATE에서 다시 읽는다(갱신 후 재시도에 새 토큰이 반영되도록).
+        const attempt = async () => {
+          const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=ARTI&searchQuery=${encodeURIComponent(q)}&rowCount=1`;
           const resp = await fetchWithRetry429(url, { timeout: 10000 });
-          if (!resp.ok) return { value: 0, status: 'error' };
-          const xml  = new DOMParser().parseFromString(await resp.text(), 'text/xml');
-          if (xml.querySelector('parsererror') || xml.querySelector('errorCode')) return { value: 0, status: 'error' };
-          const el   = xml.querySelector('TotalCount') || xml.querySelector('totalCount');
+          if (!resp.ok) return { result: { value: 0, status: 'error' } };
+          const xml = new DOMParser().parseFromString(await resp.text(), 'text/xml');
+          if (xml.querySelector('parsererror')) return { result: { value: 0, status: 'error' } };
+          const errorCode = xml.querySelector('errorCode')?.textContent?.trim();
+          if (errorCode) return { errorCode, result: { value: 0, status: 'error' } };
+          const el = xml.querySelector('TotalCount') || xml.querySelector('totalCount');
           const value = parseInt(el?.textContent) || 0;
-          return { value, status: value > 0 ? 'ok' : 'no_result' };
+          return { result: { value, status: value > 0 ? 'ok' : 'no_result' } };
+        };
+        try {
+          let out = await attempt();
+          if (out.errorCode === 'E4103') {   // 토큰 만료 → 갱신 후 1회 재시도
+            await refreshTokenOnce();
+            out = await attempt();
+          }
+          return out.result;
         } catch { return { value: 0, status: 'error' }; }
       };
 
