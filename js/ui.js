@@ -939,7 +939,7 @@
         const searchQuery = JSON.stringify({ BI: mainQuery });
         const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${n}`;
         try {
-          const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+          const resp = await fetchWithRetry429(url, { timeout: 8000 });
           const text = await resp.text();
           return new DOMParser().parseFromString(text, 'text/xml');
         } catch { return null; }
@@ -1423,7 +1423,7 @@ Respond ONLY with this JSON structure:
         try {
           const searchQuery = JSON.stringify({ BI: query });
           const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${rowCount}`;
-          const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+          const resp = await fetchWithRetry429(url, { timeout: 10000 });
           const text = await resp.text();
           if (!resp.ok) return { xml: null, metric: metric(0, 'error', { error: `HTTP ${resp.status}` }) };
           const xml = new DOMParser().parseFromString(text, 'text/xml');
@@ -1479,7 +1479,7 @@ Respond ONLY with this JSON structure:
         try {
           const params = new URLSearchParams({ collection: 'project', query: canonicalQuery, displayCnt: '1', startPosition: '1' });
           if (STATE.ntisKey) params.set('apprvKey', STATE.ntisKey);
-          const resp = await fetch(`${proxyBase}/ntis?${params}`, { signal: AbortSignal.timeout(7000) });
+          const resp = await fetchWithRetry429(`${proxyBase}/ntis?${params}`, { timeout: 7000 });
           const text = await resp.text();
           if (!resp.ok) return { xml: null, metric: metric(0, 'error', { error: `HTTP ${resp.status}` }) };
           const xml = new DOMParser().parseFromString(text, 'text/xml');
@@ -1541,13 +1541,30 @@ Respond ONLY with this JSON structure:
       });
     }
 
+    // ScienceON API는 짧은 시간에 요청이 몰리면 HTTP 429(Too Many Requests)를 반환한다.
+    // 429를 즉시 실패로 확정하면 후보가 "핵심 데이터 조회 오류"로 부당하게 탈락해
+    // 정식 순위 후보가 0개가 되므로, 지수 백오프로 재시도한다.
+    async function fetchWithRetry429(url, { timeout = 10000, tries = 3 } = {}) {
+      let lastResp = null;
+      for (let attempt = 0; attempt < tries; attempt++) {
+        const resp = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+        if (resp.status !== 429) return resp;
+        lastResp = resp;
+        if (attempt < tries - 1) {
+          const wait = 700 * Math.pow(2, attempt) + Math.random() * 300;
+          await new Promise(r => setTimeout(r, wait));
+        }
+      }
+      return lastResp;
+    }
+
     // 후보별 최근 완결 2년과 그 이전 2년을 동적으로 비교한다.
     async function fetchTrendSignals(candidates) {
       const fetchYearCount = async (kw, year) => {
         const q = JSON.stringify({ BI: kw, PY: String(year) });
         const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=ARTI&searchQuery=${encodeURIComponent(q)}&rowCount=1`;
         try {
-          const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+          const resp = await fetchWithRetry429(url, { timeout: 10000 });
           if (!resp.ok) return { value: 0, status: 'error' };
           const xml  = new DOMParser().parseFromString(await resp.text(), 'text/xml');
           if (xml.querySelector('parsererror') || xml.querySelector('errorCode')) return { value: 0, status: 'error' };
@@ -1559,10 +1576,13 @@ Respond ONLY with this JSON structure:
 
       const lastCompleteYear = new Date().getFullYear() - 1;
       const years = [lastCompleteYear - 3, lastCompleteYear - 2, lastCompleteYear - 1, lastCompleteYear];
-      return Promise.all(candidates.map(async candidate => {
+      // 후보 전체 × 연도 전체를 한꺼번에 병렬 호출하면(예: 6후보×4개년=24요청) ScienceON이
+      // 429로 차단해 후보들이 통째로 탈락한다. 후보는 2개씩, 연도는 순차로 호출한다.
+      return mapWithConcurrency(candidates, 2, async candidate => {
         const kw = typeof candidate === 'string' ? candidate : candidate.query;
         const label = typeof candidate === 'string' ? candidate : candidate.keyword;
-        const yearly = await Promise.all(years.map(year => fetchYearCount(kw, year)));
+        const yearly = [];
+        for (const year of years) yearly.push(await fetchYearCount(kw, year));
         const summary = CommerceScoring.summarizeTrendMetrics(yearly, 20);
         return {
           keyword: label,
@@ -1570,7 +1590,7 @@ Respond ONLY with this JSON structure:
           years,
           ...summary,
         };
-      }));
+      });
     }
 
     // ── Stage 4-B: 다양성 보정 + TOP 3 선정 ─────────────────────
