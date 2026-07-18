@@ -1277,7 +1277,11 @@ Respond ONLY with this JSON structure:
 
       const baseRequest = {
         model: getActiveCerebrasModel(),
-        reasoning_effort: 'high',   // 화이트스페이스 판단 — 추론 비중 큰 작업
+        // 추론 비활성화: 이 단계는 이제 "관측 용어 빈도표에 근거해 테마를 정리"하는
+        // 추출·요약 작업이라 긴 사고가 필요 없다. GLM은 추론 토큰이 max_tokens를 함께
+        // 소모해, 켜두면 예산을 전부 써버리고 JSON을 한 글자도 못 내는 일이 발생했다
+        // (측정: 추론 3010토큰 소모 → 'none'으로 0토큰, 총 사용량 52% 감소, 출력 품질 동일).
+        reasoning_effort: 'none',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user',   content: userPrompt   },
@@ -1285,7 +1289,7 @@ Respond ONLY with this JSON structure:
         // 관측 데이터 요약이 목적이므로 낮은 온도로 재현성을 확보한다.
         // (높은 온도는 실행마다 전혀 다른 테마를 만들어 임의성의 주범이었음)
         temperature: 0.2,
-        max_tokens: 8000,
+        max_tokens: 16000,   // 프롬프트에 빈도표·IPC가 추가돼 출력이 길어진 만큼 여유 확보
       };
 
       if (isModelExperimentMode()) return runSubKeywordModelExperiment(baseRequest);
@@ -1419,8 +1423,14 @@ Respond ONLY with this JSON structure:
           parsed = parseSubKeywordPayload(raw);
         } catch (parseError) {
           if (!truncated) throw parseError;
-          const retryRequest = { ...baseRequest, max_tokens: Math.max(16000, (baseRequest.max_tokens || 8000) * 2) };
-          console.warn(`[Cerebras ${modelId}] 응답 잘림 → max_tokens ${retryRequest.max_tokens}로 재시도`);
+          // 잘림의 주원인은 추론 토큰이 예산을 먹는 것이므로, 한도만 늘리지 말고
+          // 추론도 함께 끈다(이미 꺼져 있으면 한도 증설만 적용된다).
+          const retryRequest = {
+            ...baseRequest,
+            reasoning_effort: 'none',
+            max_tokens: Math.max(16000, (baseRequest.max_tokens || 8000) * 2),
+          };
+          console.warn(`[Cerebras ${modelId}] 응답 잘림 → 추론 off + max_tokens ${retryRequest.max_tokens}로 재시도`);
           ({ raw, truncated } = await callOnce(retryRequest));
           if (truncated) throw new Error(`AI 응답이 토큰 한도에서 잘렸습니다(재시도 후에도 미완성). 검색어를 더 좁혀 다시 시도해주세요.`);
           parsed = parseSubKeywordPayload(raw);
