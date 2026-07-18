@@ -1190,21 +1190,35 @@ Respond ONLY with this JSON structure:
 
     async function requestSubKeywordsWithModel(baseRequest, modelId) {
       const startedAt = Date.now();
-      try {
-        const resp = await cerebrasChat(baseRequest, 45000, { model: modelId });
+      // 응답이 max_tokens에 걸려 잘리면 JSON이 미완성이라 파싱이 실패한다.
+      // finish_reason으로 잘림을 감지해 출력 한도를 늘려 1회 재시도한다.
+      const callOnce = async (request) => {
+        const resp = await cerebrasChat(request, 45000, { model: modelId });
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
-          return {
-            model: modelId,
-            error: err?.error?.message || `Cerebras API 오류 (${resp.status})`,
-            latencyMs: Date.now() - startedAt,
-            score: { total: 0 },
-          };
+          throw new Error(err?.error?.message || `Cerebras API 오류 (${resp.status})`);
         }
         const data = await resp.json();
-        const raw = (data?.choices?.[0]?.message?.content || '').trim();
-        console.log(`[Cerebras ${modelId}] raw response:`, raw);
-        const parsed = parseSubKeywordPayload(raw);
+        const choice = data?.choices?.[0];
+        return {
+          raw: (choice?.message?.content || '').trim(),
+          truncated: choice?.finish_reason === 'length',
+        };
+      };
+      try {
+        let { raw, truncated } = await callOnce(baseRequest);
+        console.log(`[Cerebras ${modelId}] raw response${truncated ? ' (truncated)' : ''}:`, raw);
+        let parsed;
+        try {
+          parsed = parseSubKeywordPayload(raw);
+        } catch (parseError) {
+          if (!truncated) throw parseError;
+          const retryRequest = { ...baseRequest, max_tokens: Math.max(16000, (baseRequest.max_tokens || 8000) * 2) };
+          console.warn(`[Cerebras ${modelId}] 응답 잘림 → max_tokens ${retryRequest.max_tokens}로 재시도`);
+          ({ raw, truncated } = await callOnce(retryRequest));
+          if (truncated) throw new Error(`AI 응답이 토큰 한도에서 잘렸습니다(재시도 후에도 미완성). 검색어를 더 좁혀 다시 시도해주세요.`);
+          parsed = parseSubKeywordPayload(raw);
+        }
         const result = normalizeSubKeywordResult(parsed);
         const score = scoreSubKeywordModelResult(result);
         return { model: modelId, raw, result, score, latencyMs: Date.now() - startedAt };
