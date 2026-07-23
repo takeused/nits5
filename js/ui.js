@@ -416,7 +416,11 @@
       if (sessionStorage.getItem('sc_admin_ok') === '1') { showAdminPanel(); return; }
       const input = prompt('관리자 암호를 입력하세요:');
       if (input === null) return;                     // 취소
-      if (input !== ADMIN_PASSCODE) { showToast('암호가 올바르지 않습니다.', 'error'); return; }
+      // 앞뒤 공백·자동 대문자화(모바일 키보드)를 허용한다. 소프트 게이트라 무방.
+      if (input.trim().toLowerCase() !== ADMIN_PASSCODE.toLowerCase()) {
+        showToast('암호가 올바르지 않습니다.', 'error');
+        return;
+      }
       sessionStorage.setItem('sc_admin_ok', '1');     // 이 탭 세션 동안 재입력 생략
       showAdminPanel();
     }
