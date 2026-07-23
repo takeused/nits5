@@ -414,10 +414,12 @@
 
     function openAdminPanel() {
       if (sessionStorage.getItem('sc_admin_ok') === '1') { showAdminPanel(); return; }
-      const input = prompt('관리자 암호를 입력하세요:');
+      const input = prompt('관리자 암호를 입력하세요 (예: nits2026)');
       if (input === null) return;                     // 취소
-      // 앞뒤 공백·자동 대문자화(모바일 키보드)를 허용한다. 소프트 게이트라 무방.
-      if (input.trim().toLowerCase() !== ADMIN_PASSCODE.toLowerCase()) {
+      // 자동 대문자화(모바일)·앞뒤/중간 공백·전각 문자(한글 IME)를 모두 흡수한다.
+      // NFKC로 전각→반각 정규화 후 모든 공백 제거 + 소문자 비교. 소프트 게이트라 무방.
+      const norm = (s) => String(s).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+      if (norm(input) !== norm(ADMIN_PASSCODE)) {
         showToast('암호가 올바르지 않습니다.', 'error');
         return;
       }
