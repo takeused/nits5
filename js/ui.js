@@ -404,7 +404,7 @@
     // 주의: 정적 웹이라 이 암호는 소스에 노출되는 "소프트 게이트"이며 진짜 보안이 아니다.
     // (모델 선택은 API 키 등 민감정보를 노출하지 않으므로 이 수준으로 충분하다.)
     // 암호를 바꾸려면 아래 한 줄만 수정하면 된다.
-    const ADMIN_PASSCODE = 'nits2026';
+    const ADMIN_PASSCODE = 'ntis2026';
 
     const AI_PROVIDER_OPTIONS = [
       { value: 'auto',     label: '자동 (권장)', desc: 'Cerebras 우선 → 실패 시 Gemini' },
@@ -414,7 +414,7 @@
 
     function openAdminPanel() {
       if (sessionStorage.getItem('sc_admin_ok') === '1') { showAdminPanel(); return; }
-      const input = prompt('관리자 암호를 입력하세요 (예: nits2026)');
+      const input = prompt('관리자 암호를 입력하세요');
       if (input === null) return;                     // 취소
       // 자동 대문자화(모바일)·앞뒤/중간 공백·전각 문자(한글 IME)를 모두 흡수한다.
       // NFKC로 전각→반각 정규화 후 모든 공백 제거 + 소문자 비교. 소프트 게이트라 무방.
