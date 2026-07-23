@@ -400,6 +400,106 @@
       });
     }
 
+    // ── Admin 패널 (LLM 제공자·모델 선택) ───────────────────────────
+    // 주의: 정적 웹이라 이 암호는 소스에 노출되는 "소프트 게이트"이며 진짜 보안이 아니다.
+    // (모델 선택은 API 키 등 민감정보를 노출하지 않으므로 이 수준으로 충분하다.)
+    // 암호를 바꾸려면 아래 한 줄만 수정하면 된다.
+    const ADMIN_PASSCODE = 'nits2026';
+
+    const AI_PROVIDER_OPTIONS = [
+      { value: 'auto',     label: '자동 (권장)', desc: 'Cerebras 우선 → 실패 시 Gemini' },
+      { value: 'cerebras', label: 'Cerebras 강제', desc: 'Gemini 폴백 없음. 아래 모델 사용' },
+      { value: 'gemini',   label: 'Gemini 강제', desc: 'gemini-3.1-flash-lite로 바로 호출' },
+    ];
+
+    function openAdminPanel() {
+      if (sessionStorage.getItem('sc_admin_ok') === '1') { showAdminPanel(); return; }
+      const input = prompt('관리자 암호를 입력하세요:');
+      if (input === null) return;                     // 취소
+      if (input !== ADMIN_PASSCODE) { showToast('암호가 올바르지 않습니다.', 'error'); return; }
+      sessionStorage.setItem('sc_admin_ok', '1');     // 이 탭 세션 동안 재입력 생략
+      showAdminPanel();
+    }
+
+    function showAdminPanel() {
+      const provider = STATE.aiProviderMode || 'auto';
+      const model = STATE.aiModelMode || AI_MODEL_MODES.GLM;
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+      const provRadios = AI_PROVIDER_OPTIONS.map(o => `
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid ${provider===o.value?'#111':'#e5e7eb'};border-radius:9px;cursor:pointer;margin-bottom:6px;background:${provider===o.value?'#f9fafb':'#fff'};">
+          <input type="radio" name="adminProvider" value="${o.value}" ${provider===o.value?'checked':''} style="margin-top:2px;">
+          <span><strong style="font-size:13px;color:#111;">${o.label}</strong>
+          <span style="display:block;font-size:11px;color:#6b7280;margin-top:1px;">${o.desc}</span></span>
+        </label>`).join('');
+      overlay.innerHTML = `
+        <div role="dialog" aria-modal="true" aria-labelledby="adminTitle"
+             style="background:#fff;border-radius:14px;max-width:440px;width:100%;padding:22px 24px;box-shadow:0 20px 50px rgba(0,0,0,0.25);max-height:90vh;overflow:auto;">
+          <p id="adminTitle" style="font-size:15px;font-weight:800;color:#111;margin:0 0 14px;">🔒 관리자 — AI 모델 설정</p>
+
+          <p style="font-size:12px;font-weight:700;color:#374151;margin:0 0 6px;">제공자</p>
+          ${provRadios}
+
+          <div id="adminModelWrap" style="margin-top:12px;${provider==='gemini'?'opacity:0.4;pointer-events:none;':''}">
+            <p style="font-size:12px;font-weight:700;color:#374151;margin:0 0 6px;">Cerebras 모델 <span style="font-weight:400;color:#9ca3af;">(자동·Cerebras 강제일 때)</span></p>
+            <select id="adminModelSelect" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
+              <option value="${AI_MODEL_MODES.GLM}" ${model===AI_MODEL_MODES.GLM?'selected':''}>zai-glm-4.7 (기본)</option>
+              <option value="${AI_MODEL_MODES.GPT}" ${model===AI_MODEL_MODES.GPT?'selected':''}>gpt-oss-120b</option>
+              <option value="${AI_MODEL_MODES.COMPARE}" ${model===AI_MODEL_MODES.COMPARE?'selected':''}>비교 실험 (GLM vs GPT)</option>
+            </select>
+          </div>
+
+          <p style="font-size:11px;color:#9ca3af;margin:14px 0 0;line-height:1.5;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:9px 11px;">
+            현재 서버 상태 — Cerebras: <strong>${STATE.cerebrasConfigured===false?'없음':'있음'}</strong> · Gemini: <strong>${STATE.geminiConfigured?'있음':'없음'}</strong>.
+            'Gemini 강제'는 검색어·논문 제목이 Google로 전송됨을 관리자가 승인한 것으로 간주합니다.
+          </p>
+
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+            <button type="button" data-act="cancel" style="padding:8px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;color:#374151;font-size:12.5px;font-weight:600;cursor:pointer;">취소</button>
+            <button type="button" data-act="save" style="padding:8px 14px;border-radius:8px;border:1px solid #111;background:#111;color:#fff;font-size:12.5px;font-weight:700;cursor:pointer;">저장</button>
+          </div>
+        </div>`;
+      const close = () => { document.removeEventListener('keydown', onKey); overlay.remove(); };
+      const onKey = (e) => { if (e.key === 'Escape') close(); };
+      overlay.addEventListener('change', (e) => {
+        if (e.target.name === 'adminProvider') {
+          const wrap = overlay.querySelector('#adminModelWrap');
+          const gemini = e.target.value === 'gemini';
+          wrap.style.opacity = gemini ? '0.4' : '';
+          wrap.style.pointerEvents = gemini ? 'none' : '';
+        }
+      });
+      overlay.addEventListener('click', (e) => {
+        const act = e.target.closest('button')?.dataset.act;
+        if (act === 'cancel' || e.target === overlay) return close();
+        if (act === 'save') {
+          const prov = overlay.querySelector('input[name="adminProvider"]:checked')?.value || 'auto';
+          const mdl = overlay.querySelector('#adminModelSelect')?.value || AI_MODEL_MODES.GLM;
+          applyAdminAiSettings(prov, mdl);
+          close();
+        }
+      });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(overlay);
+    }
+
+    function applyAdminAiSettings(providerMode, modelMode) {
+      STATE.aiProviderMode = ['auto', 'cerebras', 'gemini'].includes(providerMode) ? providerMode : 'auto';
+      localStorage.setItem('sc_ai_provider_mode', STATE.aiProviderMode);
+      if (Object.values(AI_MODEL_MODES).includes(modelMode)) {
+        STATE.aiModelMode = modelMode;
+        localStorage.setItem('sc_ai_model_mode', modelMode);
+        const inp = document.getElementById('aiModelModeInput');
+        if (inp) inp.value = modelMode;
+      }
+      // 'Gemini 강제'는 관리자의 명시적 선택이므로 데이터 전송 동의로 간주한다.
+      if (STATE.aiProviderMode === 'gemini') localStorage.setItem('sc_gemini_consent', 'granted');
+      const label = STATE.aiProviderMode === 'gemini' ? 'Gemini 강제'
+        : STATE.aiProviderMode === 'cerebras' ? `Cerebras 강제 (${getCerebrasModelLabel(getActiveCerebrasModel())})`
+        : `자동 (Cerebras ${getCerebrasModelLabel(getActiveCerebrasModel())} → Gemini)`;
+      showToast(`AI 모델 설정 저장됨: ${label}`, 'success');
+    }
+
     // AI 인증키는 가능하면 서버 프록시에서만 주입한다. 프록시가 서버 키를 보유하면
     // 프록시를 경유하고, 그렇지 않으면 브라우저 입력 키로 직접 호출한다.
     // Cerebras가 막히는 환경을 위해 Gemini(/gemini) 대체 경로를 둔다 — Google의
@@ -426,28 +526,36 @@
           }
         };
 
-        // 서버가 어떤 키를 가졌는지 /health로 파악한 값에 따라 시도 순서를 정한다.
+        // 서버가 어떤 키를 가졌는지 /health로 파악한 값 + Admin 제공자 설정으로 경로를 정한다.
         // (구버전 프록시는 두 플래그가 없으므로 Cerebras를 기본으로 시도)
         const hasCerebras = STATE.cerebrasConfigured !== false;
         const hasGemini   = STATE.geminiConfigured === true;
+        const providerMode = STATE.aiProviderMode || 'auto';
+
+        // Admin이 'Gemini 강제'로 선택한 경우 — 바로 Gemini 호출 (선택 자체가 데이터 전송 승인).
+        if (providerMode === 'gemini' && hasGemini) return postTo('/gemini');
+
+        // Gemini 폴백은 'auto' 모드에서만 허용한다('cerebras 강제'는 폴백 안 함).
+        const allowGeminiFallback = providerMode === 'auto' && hasGemini;
 
         if (hasCerebras) {
           try {
             const resp = await postTo('/cerebras');
-            if (resp.ok || !hasGemini) return resp;
+            if (resp.ok || !allowGeminiFallback) return resp;
             // 승인받지 못하면 전환하지 않고 원래 실패 응답을 그대로 돌려준다.
             if (!await ensureGeminiConsent()) return resp;
             console.warn(`[AI] Cerebras 실패(HTTP ${resp.status}) → 승인됨, Gemini로 전환`);
           } catch (error) {
-            if (!hasGemini) throw error;
+            if (!allowGeminiFallback) throw error;
             if (!await ensureGeminiConsent()) throw error;
             console.warn('[AI] Cerebras 호출 실패 → 승인됨, Gemini로 전환:', error.message);
           }
           return postTo('/gemini');
         }
         if (hasGemini) {
-          // Cerebras 키가 아예 없는 경우 — Gemini가 유일한 경로여도 승인은 받는다.
-          if (!await ensureGeminiConsent()) throw new Error('GEMINI_CONSENT_DECLINED');
+          // Cerebras 키가 아예 없는 경우 — Gemini가 유일한 경로. 'auto'면 승인을 받고,
+          // 'gemini 강제'는 위에서 이미 처리됐다.
+          if (providerMode !== 'gemini' && !await ensureGeminiConsent()) throw new Error('GEMINI_CONSENT_DECLINED');
           return postTo('/gemini');
         }
         return postTo('/cerebras');

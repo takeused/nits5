@@ -12,6 +12,8 @@
       ntisKey: '',
       cerebrasKey: '',
       aiModelMode: localStorage.getItem('sc_ai_model_mode') || 'zai-glm-4.7',
+      // AI 제공자 선택(Admin 패널): 'auto'(Cerebras 우선→Gemini 폴백) | 'cerebras' | 'gemini'
+      aiProviderMode: localStorage.getItem('sc_ai_provider_mode') || 'auto',
       aiConfigured: false,
       cerebrasConfigured: undefined,  // /health 미제공(구버전 프록시) 시 undefined → Cerebras 시도
       geminiConfigured: false,
