@@ -4774,17 +4774,41 @@ Respond ONLY with:
 
     // ── Step 3: 연간 정규화 + IQR 이상치 제거 ────────────────────
     function normalizeAndClean(items) {
-      const result = BudgetCore.cleanBudgetItems(items);
+      // 이상치 판정도 최종 통계와 동일하게 현재가치 보정 기준으로 수행한다(B-4).
+      const result = BudgetCore.cleanBudgetItems(items, {
+        currentYear: new Date().getFullYear(),
+        annualRate: BUDGET_ESC_RATE,
+        escalate: true,
+      });
       const d = result.diagnostics;
       if (d.missingBudgetCount > 0) {
         addBudgetLog('⚠️', `연구비 누락 ${d.missingBudgetCount}건은 통계·AI 평가에서 제외`);
       }
       if (d.iqrMultiplier === null) {
-        addBudgetLog('📊', `유효 연구비 ${result.items.length}건 — 소표본이므로 IQR 제거를 생략`);
+        const capNote = d.smallSampleCap ? ` (극단 이상치 ${d.outlierCount}건 제거, 상한 ${fmtBudget(d.smallSampleCap)})` : '';
+        addBudgetLog('📊', `유효 연구비 ${result.items.length}건 — 소표본이라 IQR 대신 극단값만 방어${capNote}`);
       } else {
-        addBudgetLog('📊', `IQR ${d.iqrMultiplier}배 기준 이상치 ${d.outlierCount}건 제외 → ${result.items.length}건 유지 (Q1: ${fmtBudget(d.q1)}, Q3: ${fmtBudget(d.q3)})`);
+        addBudgetLog('📊', `로그 IQR ${d.iqrMultiplier}배 기준 이상치 ${d.outlierCount}건 제외 → ${result.items.length}건 유지 (현재가치 보정 기준 · Q1 ${fmtBudget(d.q1)}, Q3 ${fmtBudget(d.q3)})`);
       }
       return result.items;
+    }
+
+    // 폴백 광역 검색으로 유입된 무관 과제를 이상치 제거 전에 걸러낸다(B-5).
+    // 관련 표본이 최소 5건 확보될 때만 적용(과잉 필터로 표본이 소멸하는 것 방지).
+    function applyBudgetRelevanceGate(items, projName) {
+      const stop = ['개발','연구','고도화','구축','플랫폼','시스템','기반','기술','사업','과제'];
+      const coreTokens = String(projName || '').split(/[\s,·/()]+/).filter(w => w.length >= 2 && !stop.includes(w));
+      if (!coreTokens.length) return items;
+      const isRelevant = (it) => {
+        const hay = ((it.projNm || '') + ' ' + (it.absContent || '').substring(0, 300)).toLowerCase();
+        return coreTokens.some(t => hay.includes(t.toLowerCase()));
+      };
+      const relevant = items.filter(isRelevant);
+      if (relevant.length >= 5 && relevant.length < items.length) {
+        addBudgetLog('🧹', `관련성 게이트: 핵심어 무관 ${items.length - relevant.length}건 제외 (${relevant.length}건 유지)`);
+        return relevant;
+      }
+      return items;
     }
 
     // ── Step 4: AI 유사도 평가 ───────────────────────────────────
@@ -5197,10 +5221,10 @@ Respond ONLY with:
           <summary>📐 산출 방법·가정 보기</summary>
           <ol>
             <li><strong>수집</strong> — AI 최적화 키워드(+상위 도메인 앵커·과제명 분절 폴백)로 NTIS 과제 수집 (15년 이내 · 과제번호 중복 제거)</li>
-            <li><strong>연간 정규화</strong> — 당해연도 연구비 우선, 없으면 총·정부연구비를 실제 수행월수로 연간화 (기간 미상 총액은 저신뢰 표본)</li>
+            <li><strong>연간 정규화</strong> — 당해연도 연구비 우선, 없으면 총·정부연구비를 실제 수행월수로 연간화. <strong>수행기간이 없는 총액</strong>은 그대로 두면 연간값이 과대되므로 <strong>표본의 중앙 수행연수로 나눠 연간화</strong>합니다.</li>
             <li><strong>동일 과제 병합</strong> — NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 과제번호를 따로 부여해 같은 과제가 과다 반영됩니다. <strong>과제명</strong>으로 묶어 1과제=1표본으로 병합하고(후속 연차가 다른 사업으로 편성돼도 통합), 대표 연간 연구비는 <strong>연도별 합산(같은 연도 공동수행기관 몫 합산)→그 합산액의 중앙값</strong>으로 산출합니다.</li>
             <li><strong>현재가치 보정</strong> — 수행 중간연도 기준 연 ${(BUDGET_ESC_RATE * 100).toFixed(0)}% 상승률로 올해 가치 환산 (최대 ${BUDGET_ESC_CAP}년)</li>
-            <li><strong>정제</strong> — 수행기간은 필터로 쓰지 않고 연간 환산에만 사용. 유효 표본 8건 이상일 때 IQR×1.5 이상치 제거(표본 급감 시 ×3 완화) + 관련성 게이트</li>
+            <li><strong>정제(순서: 관련성 게이트 → 현재가치 보정 → 이상치 제거)</strong> — 무관 과제를 먼저 걸러낸 뒤, 이상치 판정도 최종 통계와 동일하게 <strong>현재가치 보정값 기준</strong>으로 합니다. 이상치는 연구비의 우편향 분포에 맞춰 <strong>로그 스케일 IQR</strong>(정상 대형과제를 자르지 않음)로 제거하고, 유효 표본 5건 이상일 때 log IQR×1.5(부족 시 ×3), 5건 미만이면 중앙값의 12배를 넘는 극단값만 제거합니다.</li>
             <li><strong>AI 유사도 평가</strong> — 연구비를 숨긴 채 기술 55% / 규모·단계 30% / 최신성 15%로 대표 과제 선정</li>
             <li><strong>규모 시나리오</strong> — 소형 35백분위(20~50) / 중형 중앙값(25~75) / 대형 75백분위(50~90), 임의 배수 없음</li>
             <li><strong>분포 로그 스케일</strong> — 연구비는 소액 과제가 다수이고 대형 과제는 소수여서 오른쪽 꼬리가 긴 분포(right-skew)입니다. 선형 축으로 점을 찍으면 대부분이 왼쪽 끝에 뭉치고 대형 과제 몇 건만 멀리 떨어져 보여 판독이 어렵습니다. 로그 스케일은 <strong>배수(비율) 차이를 같은 간격</strong>으로 표시(1억→10억과 10억→100억이 동일 간격)하므로, 중앙 밀집 구간과 대형 과제를 한 화면에서 함께 읽을 수 있습니다.</li>
@@ -5345,10 +5369,11 @@ ${'─'.repeat(64)}
     - 연구개발단계 선택 시 동일 단계 과제로 동질성 강화
     - 수행기간은 표본 필터가 아니라 연간 연구비 정규화에만 사용
 
-  [Step 3] 연간 예산 정규화 + IQR 이상치 제거
+  [Step 3] 관련성 게이트 → 현재가치 보정 → 로그 IQR 이상치 제거
     - 당해연도 연구비 우선, 없으면 총·정부연구비 ÷ 실제 수행월수로 연간 환산
-    - 연구비 누락 과제 제외, 유효 표본 8건 이상일 때 IQR × 1.5 적용
-    - 제거 후 표본이 5건 미만이면 IQR × 3으로 완화
+    - 기간미상 총액은 표본 중앙 수행연수로 연간화
+    - 이상치 판정은 현재가치 보정값 기준, 로그 스케일 IQR로 우편향 분포 대응
+    - 유효 표본 5건 이상일 때 log IQR × 1.5(부족 시 ×3), 5건 미만은 중앙값 12배 초과 극단값만 제거
 
   [Step 4] AI 3차원 유사도 평가 (과제명 기반·연구비 비노출)
     - 연구비 금액을 AI 입력에서 제외하여 예산값에 의한 선택 편향 방지
@@ -5504,9 +5529,20 @@ ${'='.repeat(64)}
         // ── Step 2.5: 동일 과제(연차·공동수행기관 분할) 병합 ─────
         rawItems = collapseByProject(rawItems);
 
+        // ── Step 2.6: 기간미상 총액을 표본 중앙 수행연수로 연간화 (A-1) ──
+        const reann = BudgetCore.reannualizeUnknownPeriods(rawItems);
+        rawItems = reann.items;
+        if (reann.adjustedCount > 0) {
+          addBudgetLog('🧮', `기간미상 총액 ${reann.adjustedCount}건을 표본 중앙 수행연수(${reann.fallbackDuration.toFixed(1)}년)로 연간화`);
+        }
+
+        // ── Step 2.7: 관련성 게이트를 IQR 앞으로 (B-5) ──────────────
+        // 무관 과제가 섞인 채로 IQR 경계가 잡히지 않도록, 이상치 제거 전에 먼저 걸러낸다.
+        rawItems = applyBudgetRelevanceGate(rawItems, projName);
+
         // ── Step 3: IQR 이상치 제거 ─────────────────────────────
         setBudgetStep(3);
-        addBudgetLog('📊', 'Step 3: 연간 정규화 + IQR 이상치 제거...');
+        addBudgetLog('📊', 'Step 3: 연간 정규화 + 로그 IQR 이상치 제거...');
         const cleanedItems = normalizeAndClean(rawItems);
 
         // 연구비가 없는 원본을 다시 넣으면 근거 없는 금액을 만들게 되므로 즉시 중단한다.
@@ -5538,24 +5574,8 @@ ${'='.repeat(64)}
 
         // 연구비 분포 통계는 IQR 정제된 "전체 과제 풀"(budget>0)로 산출 → 표본이 클수록 안정적.
         // AI가 고른 finalItems는 대표 유사과제(표시·가중평균)로만 사용한다.
-        let statBase = effectiveItems.filter(i => i.annualBudget > 0);
-
-        // 관련성 게이트: 폴백 광역 검색(첫 단어 등)으로 유입된 무관 과제가
-        // 분포를 오염시키지 않도록, 과제명·초록에 입력 핵심어가 하나도 없는
-        // 항목은 (관련 표본이 충분할 때만) 분포에서 제외한다.
-        const _gateStop = ['개발','연구','고도화','구축','플랫폼','시스템','기반','기술','사업','과제'];
-        const coreTokens = projName.split(/[\s,·/()]+/).filter(w => w.length >= 2 && !_gateStop.includes(w));
-        if (coreTokens.length) {
-          const isRelevant = (it) => {
-            const hay = ((it.projNm || '') + ' ' + (it.absContent || '').substring(0, 300)).toLowerCase();
-            return coreTokens.some(t => hay.includes(t.toLowerCase()));
-          };
-          const relevant = statBase.filter(isRelevant);
-          if (relevant.length >= 8 && relevant.length < statBase.length) {
-            addBudgetLog('🧹', `관련성 게이트: 핵심어 무관 ${statBase.length - relevant.length}건을 분포에서 제외 (${relevant.length}건 유지)`);
-            statBase = relevant;
-          }
-        }
+        // 관련성 게이트는 IQR 앞(Step 2.7)에서 이미 적용되어 여기서는 중복 적용하지 않는다.
+        const statBase = effectiveItems.filter(i => i.annualBudget > 0);
 
         const useBroad = statBase.length >= 5;            // 충분하면 광범위 분포 사용
         const distItems = useBroad ? statBase : finalItems;

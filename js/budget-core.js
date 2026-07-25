@@ -98,6 +98,33 @@
     return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
   }
 
+  // 기간 미상 과제의 총액이 "연간 연구비"로 그대로 잡혀 분포를 부풀리는 것을 막는다(A-1).
+  // 표본에서 관측된 수행연수의 중앙값으로 총액을 연간화한다. 관측 기간이 하나도 없으면 3년 가정.
+  function reannualizeUnknownPeriods(items = []) {
+    const list = Array.isArray(items) ? items : [];
+    const durations = [];
+    for (const it of list) {
+      const d = durationYearsFromDates(it?.prdStartRaw, it?.prdEndRaw);
+      if (d) durations.push(d);
+    }
+    durations.sort((a, b) => a - b);
+    const fallbackDuration = durations.length ? quantileSorted(durations, 0.5) : 3;
+    let adjustedCount = 0;
+    const out = list.map(it => {
+      if (!String(it?.budgetSource || '').includes('period_unknown')) return it;
+      const total = positiveNumber(it?.totFund) || positiveNumber(it?.fundGov);
+      if (!total) return it;
+      adjustedCount++;
+      return {
+        ...it,
+        annualBudget: total / fallbackDuration,
+        budgetSource: 'total_median_annualized',
+        budgetQuality: 0.5,
+      };
+    });
+    return { items: out, fallbackDuration, adjustedCount };
+  }
+
   function cleanBudgetItems(items = {}, options = {}) {
     const source = Array.isArray(items) ? items : [];
     const valid = source.filter(item => positiveNumber(item?.annualBudget) > 0);
@@ -106,26 +133,42 @@
       missingBudgetCount: source.length - valid.length,
       outlierCount: 0,
       iqrMultiplier: null,
+      scale: 'log',
     };
-    const minimumForIqr = Number(options.minimumForIqr) || 8;
-    if (valid.length < minimumForIqr) return { items: valid, diagnostics };
+    // 소표본에서도 극단 이상치를 걸러내기 위해 임계값을 8 → 5로 낮춘다(A-2).
+    const minimumForIqr = Number(options.minimumForIqr) || 5;
 
-    // IQR(Interquartile Range, 사분위 범위) 기반 이상치 제거.
-    // 연구비를 오름차순 정렬한 뒤 4등분하여 Q1(하위 25% 지점)·Q3(상위 25% 지점)을 구하고,
-    // IQR = Q3 − Q1 (가운데 50% 데이터가 퍼진 폭)을 계산한다.
-    // 평균은 초대형 국책과제 같은 극단값 하나에 크게 휘둘리지만, IQR은 중앙 50%만 보므로
-    // 그런 이상치에 둔감하다. 아래에서 [Q1 − k·IQR, Q3 + k·IQR] 범위(k=1.5, 표본 급감 시 3)를
-    // 벗어난 과제를 이상치로 제외해 적정 연구비 왜곡을 막는다.
-    const values = valid.map(item => positiveNumber(item.annualBudget)).sort((a, b) => a - b);
-    const q1 = quantileSorted(values, 0.25);
-    const q3 = quantileSorted(values, 0.75);
+    // 이상치 판정 기준값 = 현재가치 보정 후 값(최종 통계와 동일한 기준으로 판정, B-4).
+    // 보정을 끄면(escalate:false) 원 연간값으로 판정한다.
+    const currentYear = Number(options.currentYear) || new Date().getFullYear();
+    const annualRate = Number.isFinite(Number(options.annualRate)) ? Number(options.annualRate) : 0.03;
+    const judge = (item) => options.escalate === false
+      ? positiveNumber(item?.annualBudget)
+      : (escalateBudget(item, currentYear, annualRate) || positiveNumber(item?.annualBudget));
+
+    if (valid.length < minimumForIqr) {
+      // 소표본: 사분위가 불안정하므로 중앙값 대비 극단값(P50 × cap 초과)만 보수적으로 제거(A-2).
+      const vals = valid.map(judge).sort((a, b) => a - b);
+      const med = quantileSorted(vals, 0.50);
+      const capRatio = Number(options.smallSampleCapRatio) || 12;
+      const cap = med * capRatio;
+      const cleaned = med > 0 ? valid.filter(it => judge(it) <= cap) : valid;
+      diagnostics.outlierCount = valid.length - cleaned.length;
+      if (diagnostics.outlierCount > 0) diagnostics.smallSampleCap = Math.round(cap);
+      return { items: cleaned, diagnostics };
+    }
+
+    // 연구비는 로그정규(우편향) 분포라 원값 IQR은 정상적인 대형과제까지 이상치로 잘라낸다(A-3).
+    // log10 스케일에서 Q1·Q3·IQR을 구해 [Q1−k·IQR, Q3+k·IQR]를 벗어난 과제만 제외한다.
+    const logs = valid.map(item => Math.log10(judge(item))).sort((a, b) => a - b);
+    const q1 = quantileSorted(logs, 0.25);
+    const q3 = quantileSorted(logs, 0.75);
     const iqr = q3 - q1;
-    if (iqr <= 0) return { items: valid, diagnostics: { ...diagnostics, q1, q3 } };
+    if (iqr <= 0) return { items: valid, diagnostics: { ...diagnostics, q1: Math.pow(10, q1), q3: Math.pow(10, q3) } };
 
-    // 이상치 판정: value가 [Q1 − k·IQR, Q3 + k·IQR] 안에 있으면 유지, 벗어나면 제외.
     const filterWith = multiplier => valid.filter(item => {
-      const value = positiveNumber(item.annualBudget);
-      return value >= q1 - multiplier * iqr && value <= q3 + multiplier * iqr;
+      const logValue = Math.log10(judge(item));
+      return logValue >= q1 - multiplier * iqr && logValue <= q3 + multiplier * iqr;
     });
     let multiplier = 1.5;
     let cleaned = filterWith(multiplier);
@@ -135,8 +178,8 @@
     }
     diagnostics.outlierCount = valid.length - cleaned.length;
     diagnostics.iqrMultiplier = multiplier;
-    diagnostics.q1 = q1;
-    diagnostics.q3 = q3;
+    diagnostics.q1 = Math.pow(10, q1);   // 진단 표시용: 로그 경계를 원화로 역변환
+    diagnostics.q3 = Math.pow(10, q3);
     return { items: cleaned, diagnostics };
   }
 
@@ -266,6 +309,7 @@
     durationYearsFromDates,
     normalizeAnnualBudget,
     quantileSorted,
+    reannualizeUnknownPeriods,
     cleanBudgetItems,
     escalateBudget,
     calculateBudgetEstimate,
