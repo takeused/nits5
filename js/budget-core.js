@@ -225,9 +225,27 @@
     const empiricalMedian = quantileSorted(values, 0.50);
     const rawQ1 = quantileSorted(values, 0.25);
     const rawQ3 = quantileSorted(values, 0.75);
-    const pointEstimate = Math.round(quantileSorted(values, scenario.point));
-    const recommendedLow = Math.round(quantileSorted(values, scenario.low));
-    const recommendedHigh = Math.round(quantileSorted(values, scenario.high));
+
+    // C-9) 규모 시나리오를 "분포의 부분집합"으로 산출한다. 단순히 백분위 한 점을 읽는 대신,
+    // 해당 규모의 백분위 구간[low,high]에 드는 과제만 모아 그 중앙값을 제안값,
+    // 부분집합의 실제 min~max를 권장 범위로 쓴다(같은 규모대 과제끼리 비교).
+    // 부분집합이 너무 작으면(<4건) 기존 백분위-점 방식으로 안전하게 폴백한다.
+    const bandLow = quantileSorted(values, scenario.low);
+    const bandHigh = quantileSorted(values, scenario.high);
+    const subset = values.filter(v => v >= bandLow && v <= bandHigh);
+    let pointEstimate, recommendedLow, recommendedHigh, scaleMode;
+    if (subset.length >= 4) {
+      pointEstimate = Math.round(quantileSorted(subset, 0.50));
+      recommendedLow = Math.round(subset[0]);
+      recommendedHigh = Math.round(subset[subset.length - 1]);
+      scaleMode = 'subset';
+    } else {
+      pointEstimate = Math.round(quantileSorted(values, scenario.point));
+      recommendedLow = Math.round(bandLow);
+      recommendedHigh = Math.round(bandHigh);
+      scaleMode = 'percentile';
+    }
+
     const average = values.reduce((sum, value) => sum + value, 0) / n;
     const variance = values.reduce((sum, value) => sum + (value - average) ** 2, 0) / n;
     const standardDeviation = Math.sqrt(variance);
@@ -239,11 +257,23 @@
       positiveNumber(item?.similarity) > 0 &&
       positiveNumber(item?.annualBudget) > 0
     );
-    const totalWeight = aiEvaluated.reduce((sum, item) => sum + positiveNumber(item.similarity), 0);
+    // C-8) 유사도 가중을 선명하게: 선형 대신 (유사도−50)²을 가중치로 써 고유사 과제에 집중한다.
+    // 유사도 50 이하는 좋은 비교대상이 아니므로 가중 0. 전부 0이면 단순평균으로 폴백.
+    const simWeight = (sim) => Math.pow(Math.max(0, positiveNumber(sim) - 50), 2);
+    const aiEscalated = aiEvaluated.map(item => ({
+      value: escalateBudget(item, currentYear, annualRate),
+      weight: simWeight(item.similarity),
+    }));
+    const totalWeight = aiEscalated.reduce((sum, r) => sum + r.weight, 0);
     const weightedAvg = totalWeight > 0
-      ? Math.round(aiEvaluated.reduce((sum, item) =>
-          sum + escalateBudget(item, currentYear, annualRate) * positiveNumber(item.similarity) / totalWeight, 0))
-      : null;
+      ? Math.round(aiEscalated.reduce((sum, r) => sum + r.value * r.weight / totalWeight, 0))
+      : (aiEscalated.length
+          ? Math.round(aiEscalated.reduce((sum, r) => sum + r.value, 0) / aiEscalated.length)
+          : null);
+    // C-7) AI 대표과제와 같은 모집단의 중앙값. 가중평균과 이 값을 비교하면(같은 모집단)
+    // 유사도 가중이 어느 쪽으로 쏠렸는지 알 수 있다. 전체 분포 제안값과의 비교는 모집단이 달라 부적절.
+    const aiSortedValues = aiEscalated.map(r => r.value).sort((a, b) => a - b);
+    const aiMedian = aiSortedValues.length ? Math.round(quantileSorted(aiSortedValues, 0.50)) : null;
     const avgSimilarity = aiEvaluated.length
       ? Math.round(aiEvaluated.reduce((sum, item) => sum + positiveNumber(item.similarity), 0) / aiEvaluated.length)
       : null;
@@ -256,7 +286,12 @@
       parseCompactDate(record.item?.prdStart) && parseCompactDate(record.item?.prdEnd)
     ).length / n;
     const robustSpread = empiricalMedian > 0 ? (rawQ3 - rawQ1) / empiricalMedian : 1;
-    const sampleScore = 35 * clamp(n / 15);
+    // C-6) 병합으로 표본수(n)가 줄어도, 각 과제가 여러 원 레코드(연차·공동기관)에서 관측됐다면
+    // 그 연구비 값은 더 잘 확립된 것이다. 병합된 원 레코드 수를 부분적으로 표본에 credit한다
+    // (레코드 1건당 0.25표본, 최대 +n까지). 같은 과제이므로 독립 표본으로 전액 인정하지는 않는다.
+    const mergedRecords = records.reduce((sum, record) => sum + (positiveNumber(record.item?.mergedCount) || 1), 0);
+    const effectiveN = n + Math.max(0, Math.min(n, 0.25 * (mergedRecords - n)));
+    const sampleScore = 35 * clamp(effectiveN / 15);
     const sourceScore = 25 * sourceQuality;
     const periodScore = 10 * periodCompleteness;
     const dispersionScore = 15 * (1 - clamp((robustSpread - 0.50) / 2));
@@ -279,12 +314,16 @@
       rawQ1: Math.round(rawQ1),
       rawQ3: Math.round(rawQ3),
       weightedAvg,
+      aiMedian,
       avg: average,
       sd: standardDeviation,
       cv,
       avgSimilarity,
       confidence,
       confidenceScore,
+      effectiveN: Math.round(effectiveN * 10) / 10,
+      mergedRecords,
+      scaleMode,
       sourceQuality,
       periodCompleteness,
       min: values[0],

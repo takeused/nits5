@@ -5159,7 +5159,10 @@ Respond ONLY with:
       // ── KPI 3종 (중복 없이 핵심만) ───────────────────────────────
       const benchmarkKpi = { label: '표본 중앙값', value: fmtBudget(budgetRange.empiricalMedian), sub: '규모 시나리오 적용 전 비교 기준' };
       const similarityKpi = budgetRange.weightedAvg !== null
-        ? { label: 'AI 유사도 가중평균', value: fmtBudget(budgetRange.weightedAvg), sub: `실제 AI 평가 ${budgetRange.aiN || 0}건만 반영` }
+        ? { label: 'AI 유사도 가중평균', value: fmtBudget(budgetRange.weightedAvg),
+            sub: budgetRange.aiMedian !== null
+              ? `AI 대표 ${budgetRange.aiN || 0}건 · 대표 중앙값 ${fmtBudget(budgetRange.aiMedian)}`
+              : `실제 AI 평가 ${budgetRange.aiN || 0}건만 반영` }
         : null;
       const rangeKpi = budgetRange.n >= 10
         ? { label: '규모 시나리오 권장 범위', value: `${fmtBudget(budgetRange.q1)} ~ ${fmtBudget(budgetRange.q3)}`, sub: budgetRange.scaleNote }
@@ -5225,8 +5228,8 @@ Respond ONLY with:
             <li><strong>동일 과제 병합</strong> — NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 과제번호를 따로 부여해 같은 과제가 과다 반영됩니다. <strong>과제명</strong>으로 묶어 1과제=1표본으로 병합하고(후속 연차가 다른 사업으로 편성돼도 통합), 대표 연간 연구비는 <strong>연도별 합산(같은 연도 공동수행기관 몫 합산)→그 합산액의 중앙값</strong>으로 산출합니다.</li>
             <li><strong>현재가치 보정</strong> — 수행 중간연도 기준 연 ${(BUDGET_ESC_RATE * 100).toFixed(0)}% 상승률로 올해 가치 환산 (최대 ${BUDGET_ESC_CAP}년)</li>
             <li><strong>정제(순서: 관련성 게이트 → 현재가치 보정 → 이상치 제거)</strong> — 무관 과제를 먼저 걸러낸 뒤, 이상치 판정도 최종 통계와 동일하게 <strong>현재가치 보정값 기준</strong>으로 합니다. 이상치는 연구비의 우편향 분포에 맞춰 <strong>로그 스케일 IQR</strong>(정상 대형과제를 자르지 않음)로 제거하고, 유효 표본 5건 이상일 때 log IQR×1.5(부족 시 ×3), 5건 미만이면 중앙값의 12배를 넘는 극단값만 제거합니다.</li>
-            <li><strong>AI 유사도 평가</strong> — 연구비를 숨긴 채 기술 55% / 규모·단계 30% / 최신성 15%로 대표 과제 선정</li>
-            <li><strong>규모 시나리오</strong> — 소형 35백분위(20~50) / 중형 중앙값(25~75) / 대형 75백분위(50~90), 임의 배수 없음</li>
+            <li><strong>AI 유사도 평가</strong> — 연구비를 숨긴 채 기술 55% / 규모·단계 30% / 최신성 15%로 대표 과제 선정. 유사도 가중평균은 <strong>(유사도−50)²</strong>로 가중해 고유사 과제에 집중하며, 같은 모집단의 '대표 중앙값'과 비교해 쏠림을 점검합니다.</li>
+            <li><strong>규모 시나리오</strong> — 소형/중형/대형은 분포의 백분위 구간(소형 20~50 / 중형 25~75 / 대형 50~90)에 드는 <strong>과제만 모아 그 부분집합의 중앙값</strong>을 제안값으로, 부분집합의 실제 min~max를 범위로 씁니다(같은 규모대끼리 비교). 부분집합이 4건 미만이면 백분위-점 방식으로 폴백합니다.</li>
             <li><strong>분포 로그 스케일</strong> — 연구비는 소액 과제가 다수이고 대형 과제는 소수여서 오른쪽 꼬리가 긴 분포(right-skew)입니다. 선형 축으로 점을 찍으면 대부분이 왼쪽 끝에 뭉치고 대형 과제 몇 건만 멀리 떨어져 보여 판독이 어렵습니다. 로그 스케일은 <strong>배수(비율) 차이를 같은 간격</strong>으로 표시(1억→10억과 10억→100억이 동일 간격)하므로, 중앙 밀집 구간과 대형 과제를 한 화면에서 함께 읽을 수 있습니다.</li>
           </ol>
           <p>※ 가정: 연 ${(BUDGET_ESC_RATE * 100).toFixed(0)}% 연구비 상승률. 유사과제 표의 '연간 연구비'는 원자료이며, 분포 통계·시나리오 기준값은 현재가치 보정 반영값입니다.</p>
@@ -5274,7 +5277,9 @@ Respond ONLY with:
           ${budgetRange.n >= 10
             ? `권장 범위 <strong>${fmtBudget(budgetRange.q1)} ~ ${fmtBudget(budgetRange.q3)}</strong> 내에서 과제 특성에 맞게 조정하세요.`
             : `표본이 적어 권장 범위보다 <strong>${fmtBudget(budgetRange.min)} ~ ${fmtBudget(budgetRange.max)}</strong>를 참고 범위로 활용하세요.`}
-          ${budgetRange.weightedAvg !== null ? ` AI 가중평균(<strong>${fmtBudget(budgetRange.weightedAvg)}</strong>)과 제안값 차이가 크면 이상치 가능성을 검토하세요.` : ''}
+          ${budgetRange.weightedAvg !== null && budgetRange.aiMedian !== null
+            ? ` AI 대표과제 관점에서는 유사도 가중평균 <strong>${fmtBudget(budgetRange.weightedAvg)}</strong>(대표 중앙값 ${fmtBudget(budgetRange.aiMedian)})입니다 — 둘의 차이가 크면 유사도가 특정 과제에 쏠린 것이니, 대표 과제 목록을 확인하세요. (전체 분포 기준 제안값과는 모집단이 달라 직접 비교하지 않습니다.)`
+            : ''}
         </div>
 
         <!-- 대표 유사과제 -->
@@ -5609,6 +5614,9 @@ ${'='.repeat(64)}
         };
         if (budgetRange.n < 12) {
           addBudgetLog('ℹ️', `표본 축소 진단: 원수집 ${rawItems.length}건 → 유효 연구비/IQR ${cleanedItems.length}건 → 계산 표본 ${budgetRange.n}건`);
+        }
+        if (budgetRange.mergedRecords > budgetRange.n) {
+          addBudgetLog('🔢', `신뢰도 유효표본: 계산 ${budgetRange.n}건이 원 레코드 ${budgetRange.mergedRecords}건에서 병합됨 → 유효표본 ${budgetRange.effectiveN}로 보정`);
         }
 
         addBudgetLog('🎉', `분석 완료! ${budgetRange.scaleLabel} 시나리오 연간 비교기준: ${fmtBudget(budgetRange.median)}`);
