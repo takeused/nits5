@@ -63,6 +63,24 @@ const GEMINI_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
   } catch { /* .env 없거나 읽기 실패 시 무시 */ }
 })();
 
+// ── 터널(외부) 요청 인증 ─────────────────────────────────────────
+// Cloudflare 터널로 들어온 요청은 cloudflared가 Cf-Connecting-Ip/Cf-Ray 헤더를 붙인다.
+// 이런 외부 요청은 .env의 PROXY_TOKEN과 같은 X-Proxy-Token 헤더가 있어야만 처리한다.
+// (없으면 터널 URL을 아는 누구나 서버 자격증명으로 토큰 발급·NTIS 조회·AI 호출을 할 수 있다)
+// 로컬/인트라넷 직접 접속은 이 헤더가 없으므로 기존처럼 인증 없이 동작한다.
+const PROXY_TOKEN = process.env.PROXY_TOKEN || '';
+
+function isTunneledRequest(req) {
+  return Boolean(req.headers['cf-connecting-ip'] || req.headers['cf-ray']);
+}
+
+function proxyTokenMatches(given) {
+  if (!PROXY_TOKEN || typeof given !== 'string') return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(PROXY_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 // ── 서버 환경변수 자격증명 (인트라넷 다중 PC 지원) ────────────────
 const REGISTERED = {
   clientId: process.env.SC_CLIENT_ID || '',
@@ -190,7 +208,7 @@ function readJSONBody(req, maxBytes = 1024 * 1024) {
 function setCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,Content-Type,Authorization,Accept,Origin');
+  res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,Content-Type,Authorization,Accept,Origin,X-Proxy-Token');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
 }
 
@@ -305,6 +323,17 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204);
     res.end();
     return;
+  }
+
+  // ── 터널 경유 요청: /health(연결 확인용)를 제외한 모든 요청(정적 파일 포함)에
+  //    PROXY_TOKEN 인증을 요구한다.
+  if (isTunneledRequest(req) && pathname !== '/health') {
+    if (!PROXY_TOKEN) {
+      return sendJSON(res, 503, { error: 'PROXY_TOKEN_NOT_CONFIGURED', message: '서버 .env에 PROXY_TOKEN이 없어 외부(터널) 요청을 거부합니다' });
+    }
+    if (!proxyTokenMatches(req.headers['x-proxy-token'])) {
+      return sendJSON(res, 401, { error: 'PROXY_TOKEN_REQUIRED', message: '프록시 접속 키가 없거나 틀렸습니다 (?key= 로 설정)' });
+    }
   }
 
   // ── 정적 파일 서빙 (/, /index.html, /js/*, /css/*) ──────────

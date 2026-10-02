@@ -844,7 +844,7 @@
           <p class="text-gray-400 text-sm mb-3">아래 URL을 새 탭에서 열어 NTIS 응답을 직접 확인하세요.</p>
           <p class="text-xs text-gray-500 mb-1 font-semibold">NTIS 직접 URL:</p>
           <code class="text-xs text-blue-300 break-all block p-2 rounded mb-3" style="background:rgba(0,0,0,0.4);">${escHtml(directUrl)}</code>
-          <button onclick="window.open('${escAttr(directUrl)}','_blank')" class="btn-secondary text-xs">새 탭에서 NTIS 직접 호출</button>
+          <button onclick="window.open(${jsArg(directUrl)},'_blank')" class="btn-secondary text-xs">새 탭에서 NTIS 직접 호출</button>
           <p class="text-gray-500 text-xs mt-3">로컬 프록시: <code class="text-green-400">node proxy-server.js</code> 실행 후 새로고침</p>
         </div>`;
         return;
@@ -964,6 +964,12 @@
 
         const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
         const data = await resp.json();
+
+        // 터널 프록시가 접속 키를 거부한 경우 — 원인을 알 수 있게 바로 안내한다.
+        if (data.error === 'PROXY_TOKEN_REQUIRED' || data.error === 'PROXY_TOKEN_NOT_CONFIGURED') {
+          showToast(`🔒 ${data.message || '프록시 접속 키 오류'}`, 'error');
+          return;
+        }
 
         if (data.access_token) {
           if (data.client_id) {
@@ -3081,14 +3087,14 @@ Respond ONLY with this JSON structure:
         : [doi ? `DOI ${doi}` : '', cn].filter(Boolean);
       const identifierText = identifierParts.join(' · ') || '-';
       const favId = cn || title;
-      const favPayload = escAttr(JSON.stringify({
+      const favPayload = jsArg({
         id: favId,
         title,
         url,
         year: yearDisplay === '-' ? '' : yearDisplay,
         type: getTargetLabel(target),
         authors: primaryMeta
-      }));
+      });
       const openAction = url
         ? `href="${escAttr(url)}" target="_blank" rel="noopener"`
         : `href="javascript:void(0)" aria-disabled="true"`;
@@ -3310,7 +3316,7 @@ Respond ONLY with this JSON structure:
       const sourceMeta = [manager, pjtNo].filter(Boolean).join(' · ');
       const ministryBiz = [ministry, business].filter(Boolean).join(' · ') || '-';
       const favId = pjtNo || title;
-      const favPayload = escAttr(JSON.stringify({ id: favId, title, type: 'R&D과제', url: ntisUrl }));
+      const favPayload = jsArg({ id: favId, title, type: 'R&D과제', url: ntisUrl });
 
       return `
         <tr class="ntis-result-row">
@@ -3460,7 +3466,7 @@ Respond ONLY with this JSON structure:
         <div class="flex items-center justify-between mt-4 pt-3 border-t border-border">
           <span class="text-xs text-tertiary">출처: 국가과학기술지식정보서비스(NTIS)</span>
           <button type="button" class="fav-btn ${isFav(gv('ProjectNumber')||title)?'active':''}" title="즐겨찾기"
-            onclick="event.stopPropagation();toggleFav(${JSON.stringify({id:gv('ProjectNumber')||title,title,type:'R&D과제',url:'https://www.ntis.go.kr'})},this)">
+            onclick="event.stopPropagation();toggleFav(${jsArg({id:gv('ProjectNumber')||title,title,type:'R&D과제',url:'https://www.ntis.go.kr'})},this)">
             <iconify-icon icon="solar:bookmark-bold${isFav(gv('ProjectNumber')||title)?'':'-duotone'}" width="16"></iconify-icon>
           </button>
         </div>
@@ -3567,7 +3573,7 @@ Respond ONLY with this JSON structure:
         if (patCnt) researcherInfo += ` <span class="tag">특허 ${escHtml(patCnt)}건</span>`;
       }
 
-      const clickAction = url ? `onclick="window.open('${escAttr(url)}', '_blank')"` : '';
+      const clickAction = url ? `onclick="window.open(${jsArg(url)}, '_blank')"` : '';
       const cursorClass = url ? 'cursor-pointer' : '';
 
       return `
@@ -3615,16 +3621,16 @@ Respond ONLY with this JSON structure:
               data-identifier="${escAttr(`DOI ${doi}`)}" onclick="event.stopPropagation();copyIdentifierValue(this.dataset.identifier,this)">DOI: ${escHtml(doi)}</button>` : ''}
             ${cn ? `<button type="button" class="identifier-copy card-identifier-copy font-mono" title="클릭하여 식별자 전체 복사"
               data-identifier="${escAttr(cn)}" onclick="event.stopPropagation();copyIdentifierValue(this.dataset.identifier,this)">${escHtml(cn)}</button>` : ''}
-            ${target === 'RESEARCHER' ? `<button type="button" class="btn-secondary text-xs" onclick="event.stopPropagation();showDeepProfile('${escAttr(title)}','${escAttr(publisher)}')" data-name="${escAttr(title)}" data-subtitle="${escAttr(publisher)}"><iconify-icon icon="solar:user-circle-bold-duotone" width="13"></iconify-icon>심층 프로필</button>` : ''}
+            ${target === 'RESEARCHER' ? `<button type="button" class="btn-secondary text-xs" onclick="event.stopPropagation();showDeepProfile(${jsArg(title)},${jsArg(publisher)})" data-name="${escAttr(title)}" data-subtitle="${escAttr(publisher)}"><iconify-icon icon="solar:user-circle-bold-duotone" width="13"></iconify-icon>심층 프로필</button>` : ''}
           </div>
           <div class="flex items-center gap-2">
             <button type="button" class="fav-btn ${typeof hasMemo !== 'undefined' && hasMemo(cn||title) ? 'memo-active' : ''}" title="메모"
               data-memo-id="${escAttr(cn||title)}"
-              onclick="event.stopPropagation();openMemoPanel('${escAttr(cn||title)}','${escAttr(title)}')">
+              onclick="event.stopPropagation();openMemoPanel(${jsArg(cn||title)},${jsArg(title)})">
               <iconify-icon icon="solar:notes-bold${typeof hasMemo !== 'undefined' && hasMemo(cn||title) ? '' : '-duotone'}" width="16"></iconify-icon>
             </button>
             <button type="button" class="fav-btn ${isFav(cn||title)?'active':''}" title="즐겨찾기"
-              onclick="event.stopPropagation();toggleFav(${JSON.stringify({id:cn||title,title,url,year:yearDisplay,type:getTargetLabel(target),authors:authorDisplay})},this)">
+              onclick="event.stopPropagation();toggleFav(${jsArg({id:cn||title,title,url,year:yearDisplay,type:getTargetLabel(target),authors:authorDisplay})},this)">
               <iconify-icon icon="solar:bookmark-bold${isFav(cn||title)?'':'-duotone'}" width="16"></iconify-icon>
             </button>
             ${url ? `
@@ -3722,7 +3728,7 @@ Respond ONLY with this JSON structure:
         <p class="text-xs font-semibold text-gray-300 mb-2">방법 3: API 직접 테스트</p>
         <p class="text-xs text-gray-500 mb-2">아래 URL로 직접 접속하여 응답을 확인하세요:</p>
         <code class="text-xs text-blue-400 break-all block p-2 rounded" style="background:rgba(0,0,0,0.3);">${escHtml(url)}</code>
-        <button onclick="window.open('${escAttr(url)}', '_blank')" class="btn-secondary mt-2 text-xs">
+        <button onclick="window.open(${jsArg(url)}, '_blank')" class="btn-secondary mt-2 text-xs">
           <iconify-icon icon="solar:external-link-bold-duotone" width="14"></iconify-icon>
           새 탭에서 열기
         </button>
@@ -3847,6 +3853,17 @@ Respond ONLY with this JSON structure:
       return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    // 인라인 이벤트 핸들러(onclick="...")에 값을 JS 인자로 넣을 때 사용한다.
+    // escAttr만 쓰면 &#39;가 HTML 파싱에서 '로 복원되어 JS 문자열이 끊긴다(예: "Parkinson's").
+    // JSON 리터럴로 만든 뒤 속성값으로 이스케이프하므로 결과를 따옴표 없이 그대로 넣는다.
+    function jsArg(value) {
+      return JSON.stringify(value === undefined || value === null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;');
+    }
+
     function escRegex(s) {
       return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
@@ -3954,7 +3971,7 @@ Respond ONLY with this JSON structure:
       const dd = document.getElementById('historyDropdown');
       const list = document.getElementById('historyList');
       list.innerHTML = STATE.searchHistory.map(h =>
-        `<li onclick="setSearchAndGo('${escAttr(h)}')">
+        `<li onclick="setSearchAndGo(${jsArg(h)})">
           <iconify-icon icon="solar:clock-circle-bold-duotone" width="14"></iconify-icon>${escHtml(h)}
         </li>`
       ).join('') + `<li class="clear-btn" onclick="clearHistory()">
@@ -4088,7 +4105,7 @@ Respond ONLY with this JSON structure:
         return;
       }
       container.innerHTML = STATE.favorites.map(f => `
-        <div class="fav-card" onclick="${f.url ? `window.open('${escAttr(f.url)}','_blank')` : ''}">
+        <div class="fav-card" onclick="${f.url ? `window.open(${jsArg(f.url)},'_blank')` : ''}">
           <div class="flex items-start justify-between gap-2">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-1.5 mb-1">
@@ -4098,7 +4115,7 @@ Respond ONLY with this JSON structure:
               <p class="text-sm font-semibold leading-snug line-clamp-2">${escHtml(f.title||'')}</p>
               ${f.authors ? `<p class="text-xs text-gray-400 mt-1 truncate">${escHtml(f.authors)}</p>` : ''}
             </div>
-            <button type="button" class="fav-btn active flex-shrink-0" onclick="event.stopPropagation();removeFav('${escAttr(f.id)}',this)">
+            <button type="button" class="fav-btn active flex-shrink-0" onclick="event.stopPropagation();removeFav(${jsArg(f.id)},this)">
               <iconify-icon icon="solar:bookmark-bold" width="16"></iconify-icon>
             </button>
           </div>
@@ -4135,7 +4152,7 @@ Respond ONLY with this JSON structure:
           </div>
         </div>
         <div class="text-sm text-gray-400 pt-2">검색창에서 이 연구자의 논문을 검색합니다.</div>
-        <button type="button" class="btn-primary text-sm w-full mt-2" onclick="setSearchAndGo('${escAttr(name)}')">
+        <button type="button" class="btn-primary text-sm w-full mt-2" onclick="setSearchAndGo(${jsArg(name)})">
           <iconify-icon icon="solar:magnifer-bold" width="14"></iconify-icon>논문 검색
         </button>`;
       document.getElementById('profilePanel').classList.add('open');
@@ -5795,7 +5812,7 @@ ${'='.repeat(64)}
       container.innerHTML = top.map(({ display, count }) => {
         const sz = count === maxCount ? 'text-sm font-bold' : count >= maxCount * 0.6 ? 'text-xs font-semibold' : 'text-xs';
         const op = count >= maxCount * 0.6 ? '' : 'opacity-70';
-        return `<button type="button" class="keyword-cloud-tag ${sz} ${op}" onclick="setSearchAndGo('${escAttr(display)}')" title="${escAttr(display)} (${count}건)">${escHtml(display)}<span class="text-[10px] opacity-50 ml-0.5">${count}</span></button>`;
+        return `<button type="button" class="keyword-cloud-tag ${sz} ${op}" onclick="setSearchAndGo(${jsArg(display)})" title="${escAttr(display)} (${count}건)">${escHtml(display)}<span class="text-[10px] opacity-50 ml-0.5">${count}</span></button>`;
       }).join('');
     }
 
@@ -5813,7 +5830,7 @@ ${'='.repeat(64)}
         return escHtml(text).replace(new RegExp(`(${escRegex(query)})`, 'gi'), '<mark>$1</mark>');
       };
       return display.map(a =>
-        `<span class="author-link" onclick="event.stopPropagation();searchByAuthor('${escAttr(a)}')" title="${escAttr(a)} 연구자 검색">${hl(a)}</span>`
+        `<span class="author-link" onclick="event.stopPropagation();searchByAuthor(${jsArg(a)})" title="${escAttr(a)} 연구자 검색">${hl(a)}</span>`
       ).join(', ') + extra;
     }
 

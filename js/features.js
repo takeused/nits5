@@ -141,10 +141,10 @@ function renderCollectionManager() {
             <span class="text-xs text-gray-400">${items.length}건</span>
           </div>
           <div class="flex items-center gap-1.5 flex-shrink-0">
-            <button type="button" class="btn-secondary text-xs" onclick="openAddToCollection('${escAttr(col.id)}')">
+            <button type="button" class="btn-secondary text-xs" onclick="openAddToCollection(${jsArg(col.id)})">
               <iconify-icon icon="solar:add-circle-bold-duotone" width="13"></iconify-icon>추가
             </button>
-            <button type="button" class="btn-secondary text-xs" onclick="deleteCollection('${escAttr(col.id)}')">
+            <button type="button" class="btn-secondary text-xs" onclick="deleteCollection(${jsArg(col.id)})">
               <iconify-icon icon="solar:trash-bin-2-bold-duotone" width="13"></iconify-icon>
             </button>
           </div>
@@ -154,7 +154,7 @@ function renderCollectionManager() {
             ${items.slice(0, 3).map(f => `
               <div class="flex items-center justify-between gap-2">
                 <p class="text-xs text-gray-600 truncate flex-1">${escHtml(f.title || '')}</p>
-                <button type="button" onclick="removeFromCollection('${escAttr(col.id)}','${escAttr(f.id)}')" class="text-gray-300 hover:text-red-400 flex-shrink-0">
+                <button type="button" onclick="removeFromCollection(${jsArg(col.id)},${jsArg(f.id)})" class="text-gray-300 hover:text-red-400 flex-shrink-0">
                   <iconify-icon icon="solar:close-circle-bold-duotone" width="13"></iconify-icon>
                 </button>
               </div>`).join('')}
@@ -420,12 +420,12 @@ function renderDeepProfile({ name, inst, artiTotal, patentTotal, years, yearCoun
     </div>`).join('');
 
   const coHtml = topCo.map(([a, v]) => `
-    <button type="button" class="coauthor-chip" onclick="closseDeepProfile();document.getElementById('searchInput').value='${escAttr(a)}';setTarget(document.querySelector('[data-target=ARTI]'));doSearch()">
+    <button type="button" class="coauthor-chip" onclick="closeDeepProfile();document.getElementById('searchInput').value=${jsArg(a)};setTarget(document.querySelector('[data-target=ARTI]'));doSearch()">
       ${escHtml(a)} <span class="text-gray-400">${v}</span>
     </button>`).join('');
 
   const papersHtml = recentPapers.map(p => `
-    <div class="${p.url ? 'cursor-pointer hover:bg-gray-50' : ''} p-2 rounded-lg" ${p.url ? `onclick="window.open('${escAttr(p.url)}','_blank')"` : ''}>
+    <div class="${p.url ? 'cursor-pointer hover:bg-gray-50' : ''} p-2 rounded-lg" ${p.url ? `onclick="window.open(${jsArg(p.url)},'_blank')"` : ''}>
       <p class="text-sm font-medium text-gray-800 leading-snug line-clamp-2">${escHtml(p.title)}</p>
       <p class="text-xs text-gray-400 mt-1">${[p.year, p.journal].filter(Boolean).join(' · ')}</p>
     </div>`).join('');
@@ -481,7 +481,7 @@ function renderDeepProfile({ name, inst, artiTotal, patentTotal, years, yearCoun
 
     <!-- 논문 검색 버튼 -->
     <button type="button" class="btn-primary w-full justify-center mt-2"
-      onclick="closeDeepProfile();document.getElementById('searchInput').value='${escAttr(name)}';document.querySelector('[data-target=ARTI]')&&setTarget(document.querySelector('[data-target=ARTI]'));doSearch()">
+      onclick="closeDeepProfile();document.getElementById('searchInput').value=${jsArg(name)};document.querySelector('[data-target=ARTI]')&&setTarget(document.querySelector('[data-target=ARTI]'));doSearch()">
       <iconify-icon icon="solar:magnifer-bold" width="14"></iconify-icon>
       "${escHtml(name)}" 논문 전체 검색
     </button>`;

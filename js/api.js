@@ -141,18 +141,19 @@
       document.getElementById('compareGridA').innerHTML = '<div class="spinner mx-auto my-8"></div>';
       document.getElementById('compareGridB').innerHTML = '<div class="spinner mx-auto my-8"></div>';
 
-      const fetchOne = async (query) => {
+      const fetchOne = async (query, isRetry = false) => {
         const params = new URLSearchParams({ client_id: STATE.clientId, token: STATE.token,
           version: '1.0', action: 'search', target: STATE.currentTarget,
           searchQuery: JSON.stringify({ BI: query }), curPage: 1, rowCount: 5 });
         const resp = await fetch(`${getApiBase()}?${params}`);
         const text = await resp.text();
         const xml = new DOMParser().parseFromString(text, 'text/xml');
-        
-        // Token Expired check
-        if (xml.querySelector('errorCode')?.textContent === 'E4103') {
-          const ok = await refreshAccessToken();
-          if (ok) return fetchOne(query);
+
+        // 토큰 만료: 갱신 후 1회만 재시도한다 (doSearch와 동일 — 무한 재귀로 인한 E4290 폭주 방지).
+        // 두 검색이 동시에 만료를 만나도 refreshTokenOnce가 갱신 요청을 하나로 합친다.
+        if (!isRetry && xml.querySelector('errorCode')?.textContent === 'E4103') {
+          await refreshTokenOnce();
+          return fetchOne(query, true);
         }
         return xml;
       };

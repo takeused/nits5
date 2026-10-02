@@ -78,6 +78,46 @@
       const saved = clean(localStorage.getItem('sc_proxy_url'));
       return saved || clean(TUNNEL_DEFAULT);
     })();
+    // 터널 접속 키 — 터널 프록시는 이 값(서버 .env의 PROXY_TOKEN)을 X-Proxy-Token 헤더로 요구한다.
+    // ?key=... 로 한 번 열면 localStorage에 저장되고, ?key= (빈값)이면 삭제된다.
+    const PROXY_KEY = (() => {
+      try {
+        const k = new URLSearchParams(location.search).get('key');
+        if (k !== null) {
+          const v = k.trim();
+          if (v) { localStorage.setItem('sc_proxy_key', v); return v; }
+          localStorage.removeItem('sc_proxy_key');
+          return '';
+        }
+        return (localStorage.getItem('sc_proxy_key') || '').trim();
+      } catch { return ''; }
+    })();
+
+    // 접속 키·터널 주소가 주소창/방문 기록에 남지 않도록 저장 후 URL에서 제거한다.
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.has('key') || u.searchParams.has('proxy')) {
+        u.searchParams.delete('key');
+        u.searchParams.delete('proxy');
+        history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+      }
+    } catch { /* history 접근 불가 시 무시 */ }
+
+    // 터널 프록시로 가는 모든 fetch에 접속 키 헤더를 붙인다.
+    // (호출부가 수십 곳이라 개별 수정 대신 여기서 한 번에 처리)
+    if (PROXY_KEY && VERCEL_BASE && typeof window.fetch === 'function') {
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = (input, init = {}) => {
+        const target = typeof input === 'string' ? input : (input && input.url) || '';
+        if (target.startsWith(`${VERCEL_BASE}/`)) {
+          const headers = new Headers(init.headers || (typeof input === 'object' && input.headers) || undefined);
+          headers.set('X-Proxy-Token', PROXY_KEY);
+          return nativeFetch(input, { ...init, headers });
+        }
+        return nativeFetch(input, init);
+      };
+    }
+
     const CF_WORKER_BASE = 'https://YOUR_CF_SUBDOMAIN.workers.dev';
 
     // 현재 활성 프록시 ('local' | 'direct')
