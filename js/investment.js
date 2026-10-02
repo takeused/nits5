@@ -1,0 +1,374 @@
+// ============================================================
+// 정부 R&D 투자 지형 분석 — NTIS 과제 데이터로 "어디에·얼마를·누구에게" 투자하는지 본다.
+// 집계·판정 로직은 js/investment-core.js(InvestmentCore), 여기는 수집과 화면.
+//   ① 연도별 과제 건수: 연도 필터(addQuery PY)로 연도마다 1회 조회 → 정확한 전체 건수
+//   ② 투자 구조: 최근 5년 과제 중 관련도 상위 표본(최대 200건)의 부처·사업·수행주체·단계·지역
+// ============================================================
+
+const INVEST_YEAR_SPAN = 10;       // 연도별 건수 추이 기간
+const INVEST_RECENT_SPAN = 5;      // 투자 구조(표본) 기간
+const INVEST_SAMPLE_PAGES = 20;    // NTIS는 페이지당 10건 → 최대 200건
+let _investRunSeq = 0;
+
+// NTIS 1회 조회. 429는 지수 백오프로 3회까지 재시도, NTIS 오류 코드는 예외로 올린다.
+async function investNtisFetch(proxyBase, params) {
+  const url = `${proxyBase}/ntis?${params.toString()}`;
+  let resp = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (resp.status !== 429) break;
+    await new Promise(r => setTimeout(r, 700 * Math.pow(2, attempt) + Math.random() * 300));
+  }
+  if (!resp.ok) throw new Error(`NTIS HTTP ${resp.status}`);
+  const xml = new DOMParser().parseFromString(await resp.text(), 'text/xml');
+  if (xml.getElementsByTagName('parsererror').length) throw new Error('NTIS 응답 XML 파싱 실패');
+  const gx = tag => xml.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
+  const errCode = gx('CODE') || gx('returnCode');
+  if (errCode && errCode !== '0') throw new Error(`NTIS 오류 [${errCode}] ${gx('MESSAGE') || gx('returnMsg')}`);
+  return { xml, totalHits: parseInt(gx('TOTALHITS'), 10) || 0 };
+}
+
+function investParams(query, { addQuery = '', startPosition = 1 } = {}) {
+  const params = new URLSearchParams({
+    apprvKey: STATE.ntisKey, collection: 'project', SRWR: query, query,
+    displayCnt: NTIS_PAGE_SIZE, startPosition, searchRnkn: 'Y', naviCount: 5,
+  });
+  if (addQuery) params.set('addQuery', addQuery);
+  return params;
+}
+
+// HIT 1건 → 집계용 평면 레코드. 부처·기관은 <Name> 하위, 수행주체·지역은 code 속성이 붙은 텍스트.
+function investParseHit(hit) {
+  const child = (parent, tag) => parent ? Array.from(parent.children).find(el => el.tagName === tag) || null : null;
+  const text = (el) => String(el?.textContent || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  const named = (tag) => text(child(child(hit, tag), 'Name')) || text(child(hit, tag));
+  return {
+    id: text(child(hit, 'ProjectNumber')),
+    title: text(child(child(hit, 'ProjectTitle'), 'Korean')) || text(child(hit, 'ProjectTitle')),
+    year: parseInt(text(child(hit, 'ProjectYear')), 10) || null,
+    ministry: named('Ministry'),
+    orderAgency: named('OrderAgency'),
+    business: text(child(hit, 'BusinessName')),
+    bigProject: text(child(hit, 'BigprojectTitle')),
+    performer: text(child(hit, 'PerformAgent')),
+    phase: text(child(hit, 'DevelopmentPhases')),
+    region: text(child(hit, 'Region')),
+    agency: named('ResearchAgency'),
+    gov: BudgetCore.parseMoneyValue(text(child(hit, 'GovernmentFunds'))),
+    priv: BudgetCore.parseMoneyValue(text(child(hit, 'SbusinessFunds'))),
+    total: BudgetCore.parseMoneyValue(text(child(hit, 'TotalFunds'))),
+  };
+}
+
+function investSetProgress(msg) {
+  const el = document.getElementById('investProgress');
+  if (el) el.textContent = msg;
+}
+
+async function runInvestmentAnalysis() {
+  const query = document.getElementById('searchInput').value.trim() || STATE.currentQuery || '';
+  if (!query) {
+    showToast('분석할 기술 키워드를 입력해주세요', 'warning');
+    document.getElementById('searchInput').focus();
+    return;
+  }
+  if (!STATE.ntisKey && !(PROXY_AVAILABLE && STATE.ntisConfigured)) {
+    showToast('🔑 NTIS 인증키가 필요합니다. 상단 "API 설정"에서 입력해주세요', 'warning');
+    return;
+  }
+  const proxyBase = getProxyBase() || VERCEL_BASE || '';
+  if (!proxyBase) {
+    showToast('프록시 서버가 연결되어 있지 않습니다. 서버를 실행한 뒤 다시 시도해주세요.', 'warning');
+    return;
+  }
+
+  const runSeq = ++_investRunSeq;
+  const lastYear = new Date().getFullYear() - 1;            // 완결 연도까지만
+  const years = Array.from({ length: INVEST_YEAR_SPAN }, (_, i) => lastYear - INVEST_YEAR_SPAN + 1 + i);
+  const recentFrom = lastYear - INVEST_RECENT_SPAN + 1;
+
+  document.body.classList.add('search-mode');
+  hideAll();
+  const section = document.getElementById('analysisSection');
+  section.classList.remove('hidden');
+  section.innerHTML = `
+    <div class="analysis-card trend-analysis-card fade-up">
+      <div class="analysis-header flex items-center gap-3">
+        <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="20"></iconify-icon>
+        <div>
+          <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 지형 분석 — NTIS 국가R&amp;D 과제</p>
+          <p style="font-size:15px;font-weight:700;margin:0">"${escHtml(query)}"</p>
+        </div>
+      </div>
+      <div class="analysis-body trend-analysis-loading">
+        <div class="spinner"></div>
+        <p id="investProgress" style="color:#6b7280;font-size:13px;margin-top:12px;">연도별 과제 건수 집계 준비 중...</p>
+      </div>
+    </div>`;
+
+  try {
+    // ① 연도별 과제 건수 (정확한 전체 건수)
+    let doneYears = 0;
+    const counts = await mapWithConcurrency(years, 2, async (y) => {
+      try {
+        const { totalHits } = await investNtisFetch(proxyBase, investParams(query, { addQuery: `PY=${y}/MORE,${y}/UNDER` }));
+        return totalHits;
+      } catch { return null; }
+      finally { investSetProgress(`연도별 과제 건수 집계 중... (${++doneYears}/${years.length})`); }
+    });
+    if (runSeq !== _investRunSeq) return;
+
+    // ② 최근 5년 투자 구조 표본
+    const rangeQuery = `PY=${recentFrom}/MORE,${lastYear}/UNDER`;
+    const first = await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery }));
+    const recentTotal = first.totalHits;
+    const pageCount = Math.min(INVEST_SAMPLE_PAGES, Math.ceil(recentTotal / NTIS_PAGE_SIZE));
+    const pages = [first.xml];
+    let failedPages = 0;
+    let donePages = 1;
+    investSetProgress(`최근 ${INVEST_RECENT_SPAN}년 과제 표본 수집 중... (1/${Math.max(1, pageCount)}페이지)`);
+    const rest = Array.from({ length: Math.max(0, pageCount - 1) }, (_, i) => (i + 1) * NTIS_PAGE_SIZE + 1);
+    const restXml = await mapWithConcurrency(rest, 2, async (start) => {
+      try {
+        return (await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery, startPosition: start }))).xml;
+      } catch { failedPages++; return null; }
+      finally { investSetProgress(`최근 ${INVEST_RECENT_SPAN}년 과제 표본 수집 중... (${++donePages}/${pageCount}페이지)`); }
+    });
+    if (runSeq !== _investRunSeq) return;
+    pages.push(...restXml.filter(Boolean));
+
+    const seen = new Set();
+    const records = [];
+    for (const xml of pages) {
+      for (const hit of Array.from(xml.getElementsByTagName('HIT'))) {
+        const r = investParseHit(hit);
+        const key = r.id || `${r.title}|${r.year}|${r.agency}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        records.push(r);
+      }
+    }
+
+    const agg = InvestmentCore.aggregateInvestment(records);
+    const trend = InvestmentCore.summarizeYearCounts(years, counts);
+    const insights = InvestmentCore.buildInvestmentInsights(agg, trend);
+    const meta = { query, years, recentFrom, lastYear, recentTotal, failedPages, sampleSize: records.length };
+    renderInvestmentDashboard(meta, agg, trend, insights);
+    generateInvestmentAISummary(runSeq, meta, agg, trend, insights);
+  } catch (err) {
+    if (runSeq !== _investRunSeq) return;
+    console.error('[Investment]', err);
+    section.innerHTML = `<div class="analysis-card trend-analysis-card trend-analysis-error fade-up">투자 지형 분석 중 오류가 발생했습니다: ${escHtml(err.message)}</div>`;
+  }
+}
+
+// ── 화면 ──────────────────────────────────────────────────────────
+const INVEST_TONE = {
+  up: { icon: '📈', color: '#15803d' }, down: { icon: '📉', color: '#b91c1c' },
+  flat: { icon: '➖', color: '#475467' }, warn: { icon: '⚠️', color: '#b45309' },
+  gap: { icon: '🧩', color: '#1d4ed8' }, info: { icon: 'ℹ️', color: '#344054' },
+};
+
+function investSharePanel(title, allRows, { note = '' } = {}) {
+  // 반올림 0%인 항목은 막대가 의미 없어 숨긴다(합계·비중 계산에는 그대로 포함)
+  const rows = allRows.filter(r => Math.round(r.share * 100) > 0);
+  const body = rows.length
+    ? rows.map(r => `
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 64px 38px;gap:8px;align-items:center;font-size:12px;margin-bottom:6px;">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${r.isOther || r.name === '미상' ? '#98a2b3' : '#1d2939'};" title="${escAttr(r.name)} · 표본 ${r.count}건">${escHtml(r.name)}</span>
+          <span style="height:8px;background:#eef2f6;border-radius:4px;overflow:hidden;display:block;">
+            <span style="display:block;height:100%;width:${Math.max(2, Math.round(r.share * 100))}%;background:${r.isOther || r.name === '미상' ? '#cbd5e1' : '#475467'};"></span>
+          </span>
+          <span style="text-align:right;font-weight:700;color:#1d2939;">${Math.round(r.share * 100)}%</span>
+        </div>`).join('')
+    : '<div style="font-size:12px;color:#98a2b3;">데이터 없음</div>';
+  return `
+    <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;min-width:0;">
+      <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:10px;">${title}</div>
+      ${body}
+      ${note ? `<div style="font-size:10.5px;color:#98a2b3;margin-top:6px;">${note}</div>` : ''}
+    </div>`;
+}
+
+function investKpi(label, value, sub) {
+  return `
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 16px;flex:1;min-width:150px;">
+      <div style="font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:4px;">${label}</div>
+      <div style="font-size:17px;font-weight:800;color:#273444;line-height:1.3;">${value}</div>
+      ${sub ? `<div style="font-size:11px;color:#6b7280;margin-top:2px;">${sub}</div>` : ''}
+    </div>`;
+}
+
+function renderInvestmentDashboard(meta, agg, trend, insights) {
+  const { query, years, recentFrom, lastYear, recentTotal, sampleSize, failedPages } = meta;
+  const coverage = recentTotal > 0 ? Math.min(1, sampleSize / recentTotal) : 0;
+  const pctText = v => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`);
+  const topMinistry = agg.byMinistry.find(r => !r.isOther && r.name !== '미상');
+  const growthText = trend.growth === null ? '—' : `${trend.growth >= 0 ? '+' : ''}${Math.round(trend.growth * 100)}%`;
+  const sampleNote = `표본: ${recentFrom}~${lastYear}년 과제 중 관련도 상위 ${sampleSize.toLocaleString()}건 (전체 ${recentTotal.toLocaleString()}건의 ${Math.round(coverage * 100)}%) · 정부연구비 비중 기준`;
+
+  const businessRows = agg.businesses.slice(0, 10).map((b, i) => `
+    <tr style="border-top:1px solid #f2f4f7;">
+      <td style="padding:7px 8px;color:#98a2b3;font-size:11px;">${i + 1}</td>
+      <td style="padding:7px 8px;font-size:12px;color:#1d2939;font-weight:600;max-width:320px;">${escHtml(b.name)}${b.variants > 1 ? ` <span title="띄어쓰기·(R&amp;D) 등 표기가 다른 같은 사업 ${b.variants}가지를 하나로 합침" style="font-size:10px;font-weight:500;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:3px;padding:0 4px;white-space:nowrap;">표기 ${b.variants}종 통합</span>` : ''}</td>
+      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;">${escHtml(b.ministry || '-')}</td>
+      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;text-align:right;">${b.projects}건</td>
+      <td style="padding:7px 8px;font-size:11.5px;color:#1d2939;white-space:nowrap;text-align:right;font-weight:700;">${fmtBudget(b.gov)}</td>
+      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;text-align:right;">${Math.round(b.share * 100)}%</td>
+      <td style="padding:7px 8px;font-size:11px;color:#98a2b3;white-space:nowrap;">${b.yearFrom ? (b.yearFrom === b.yearTo ? b.yearFrom : `${b.yearFrom}~${b.yearTo}`) : '-'}</td>
+    </tr>`).join('');
+
+  const section = document.getElementById('analysisSection');
+  section.innerHTML = `
+    <div id="investDashboard" class="analysis-card trend-analysis-card fade-up">
+      <div class="analysis-header flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="20"></iconify-icon>
+          <div>
+            <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 지형 분석 — 과제 건수 ${years[0]}~${years[years.length - 1]} · 투자 구조 ${recentFrom}~${lastYear}</p>
+            <p style="font-size:15px;font-weight:700;margin:0">"${escHtml(query)}"</p>
+          </div>
+        </div>
+        <button type="button" onclick="document.getElementById('analysisSection').classList.add('hidden')" class="text-white/60 hover:text-white transition-colors" aria-label="닫기">
+          <iconify-icon icon="solar:close-circle-bold" width="18"></iconify-icon>
+        </button>
+      </div>
+      <div class="analysis-body trend-analysis-body">
+        <div class="trend-kpi-grid">
+          ${investKpi(`최근 ${INVEST_RECENT_SPAN}년 과제`, `${recentTotal.toLocaleString()}건`, `${recentFrom}~${lastYear} · 연차·기관 단위 전체 건수`)}
+          ${investKpi('과제 건수 추세', `${escHtml(trend.phase)} ${growthText}`, '최근 3년 평균 vs 직전 3년 평균')}
+          ${investKpi('주도 부처', topMinistry ? escHtml(topMinistry.name) : '—', topMinistry ? `정부연구비 ${pctText(topMinistry.share)} · HHI ${agg.ministryHHI}` : '')}
+          ${investKpi('기업 수행 비중', pctText(agg.companyShare), `대학 ${pctText(agg.universityShare)} · 민간부담 ${pctText(agg.privateRatio)}`)}
+        </div>
+
+        <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:16px;margin-bottom:14px;">
+          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:10px;">연도별 과제 건수 (NTIS 전체 건수, 연차·기관 단위)${trend.complete ? '' : ' · 일부 연도 조회 실패'}</div>
+          <div style="position:relative;height:220px;"><canvas id="investYearChart"></canvas></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-bottom:14px;">
+          ${investSharePanel('부처별 정부연구비', agg.byMinistry)}
+          ${investSharePanel('전문기관별', agg.byOrderAgency)}
+          ${investSharePanel('수행주체별', agg.byPerformer)}
+          ${investSharePanel('연구개발단계별', agg.byPhase)}
+          ${investSharePanel('지역별 (시도)', agg.byRegion, { note: `수도권(서울·경기·인천) ${pctText(agg.capitalShare)}` })}
+        </div>
+
+        <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;margin-bottom:14px;overflow-x:auto;">
+          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:4px;">주요 기존 사업 (내역사업) — 신규사업 유사·중복 검토용</div>
+          <div style="font-size:10.5px;color:#98a2b3;margin-bottom:8px;">표본 과제 기준 정부연구비 순. 과제 수는 과제명 기준 고유 과제.</div>
+          ${businessRows ? `<table style="width:100%;border-collapse:collapse;min-width:620px;">
+            <thead><tr style="font-size:10.5px;color:#98a2b3;text-align:left;">
+              <th style="padding:4px 8px;">#</th><th style="padding:4px 8px;">사업명</th><th style="padding:4px 8px;">부처</th>
+              <th style="padding:4px 8px;text-align:right;">과제</th><th style="padding:4px 8px;text-align:right;">정부연구비(표본)</th>
+              <th style="padding:4px 8px;text-align:right;">비중</th><th style="padding:4px 8px;">연도</th>
+            </tr></thead><tbody>${businessRows}</tbody></table>`
+          : '<div style="font-size:12px;color:#98a2b3;">사업명 정보가 없습니다.</div>'}
+        </div>
+
+        <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:12px 16px;border-radius:0 8px 8px 0;margin-bottom:14px;">
+          <div style="font-size:12px;font-weight:700;color:#1d4ed8;margin-bottom:8px;">🔍 데이터 기반 신호 <span style="font-weight:500;color:#64748b;">(판단 보조용 탐색 신호)</span></div>
+          <ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:5px;">
+            ${insights.length ? insights.map(s => `<li style="font-size:12px;color:#1e3a5f;line-height:1.6;">${INVEST_TONE[s.tone]?.icon || '•'} ${escHtml(s.text)}</li>`).join('')
+              : '<li style="font-size:12px;color:#64748b;">특이 신호가 감지되지 않았습니다.</li>'}
+          </ul>
+        </div>
+
+        <div id="investAIBox" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px 16px;margin-bottom:14px;${hasAIAccess() ? '' : 'display:none;'}">
+          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:8px;">🤖 정책·신규사업 기획 시사점 (AI 요약)</div>
+          <div id="investAIBody" style="font-size:12px;color:#475467;">위 수치를 바탕으로 시사점을 작성하는 중...</div>
+        </div>
+
+        <div style="font-size:11px;color:#98a2b3;margin-bottom:10px;">${escHtml(sampleNote)}${failedPages ? ` · 수집 실패 ${failedPages}페이지 제외` : ''}</div>
+
+        <details style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;">
+          <summary style="font-size:12px;font-weight:700;color:#475569;cursor:pointer;list-style:none;">📐 투자 지형 분석은 이렇게 산출됩니다</summary>
+          <div style="margin-top:12px;font-size:12px;color:#475569;line-height:1.75;">
+            <ol style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:7px;">
+              <li><strong>연도별 과제 건수</strong> — NTIS 과제검색에 연도 필터(PY)를 걸어 연도마다 <strong>전체 건수</strong>를 조회합니다(표본 아님). NTIS는 과제를 <strong>연차·수행기관 단위 레코드</strong>로 집계하므로, 다년·공동 과제는 여러 건으로 셉니다.</li>
+              <li><strong>투자 구조 표본</strong> — 최근 ${INVEST_RECENT_SPAN}년(${recentFrom}~${lastYear}) 과제 중 검색 관련도 상위 최대 ${INVEST_SAMPLE_PAGES * NTIS_PAGE_SIZE}건을 가져옵니다(NTIS가 페이지당 10건만 제공). 부처·전문기관·수행주체·단계·지역은 이 표본의 <strong>정부연구비 비중</strong>입니다.</li>
+              <li><strong>합산 방식</strong> — 레코드마다 정부연구비는 "그 기관의 그 연도 금액"이라 단순 합산해도 이중 계산이 없습니다. 정부연구비가 비어 있는 경우 건수 비중으로 대체합니다.</li>
+              <li><strong>주요 기존 사업</strong> — 내역사업명(BusinessName) 기준으로 묶은 표본 정부연구비 순위입니다. 신규사업 기획 시 유사·중복 검토의 출발점으로 쓰세요.</li>
+              <li><strong>데이터 기반 신호</strong> — 부처 1위 60% 이상(집중), 기업 수행 20% 미만(사업화 공백), 기초 50% 이상·개발 60% 이상(단계 편중), 민간부담 10% 미만, 수도권 60% 이상, 단일 사업 30% 이상 등 <strong>고정 기준</strong>으로 판정합니다. 정책 판단은 원자료와 함께 검토하세요.</li>
+            </ol>
+            <p style="margin:12px 0 0 0;font-size:11px;color:#94a3b8;">※ 표본은 검색 관련도 순이라 대형·핵심 과제 위주로 잡히며, 전수 통계와 차이가 있을 수 있습니다. 검색어가 넓을수록 무관 과제가 섞일 수 있습니다.</p>
+          </div>
+        </details>
+      </div>
+    </div>`;
+
+  requestAnimationFrame(() => {
+    const ctx = document.getElementById('investYearChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+    if (window._investChartInstance) window._investChartInstance.destroy();
+    const peak = trend.peakYear;
+    window._investChartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: years.map(String),
+        datasets: [{
+          label: '과제 건수',
+          data: trend.counts.map(v => (v === null ? 0 : v)),
+          backgroundColor: years.map(y => (y === peak ? '#344054' : y >= recentFrom ? '#667085' : '#cbd5e1')),
+          borderRadius: 4,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${Number(c.raw).toLocaleString()}건${trend.counts[c.dataIndex] === null ? ' (조회 실패)' : ''}` } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#667085' } },
+          y: { beginAtZero: true, grid: { color: 'rgba(52,64,84,0.08)' }, ticks: { color: '#667085' } },
+        },
+      },
+    });
+  });
+}
+
+// ── AI 시사점 (선택) ────────────────────────────────────────────
+async function generateInvestmentAISummary(runSeq, meta, agg, trend, insights) {
+  const body = document.getElementById('investAIBody');
+  if (!body || !hasAIAccess()) return;
+  const share = rows => rows.filter(r => !r.isOther).slice(0, 5).map(r => `${r.name} ${Math.round(r.share * 100)}%`).join(', ');
+  const facts = {
+    기술: meta.query,
+    연도별과제건수: Object.fromEntries(meta.years.map((y, i) => [y, trend.counts[i]])),
+    추세: `${trend.phase}${trend.growth !== null ? ` (최근3년 vs 직전3년 ${Math.round(trend.growth * 100)}%)` : ''}`,
+    표본: `${meta.recentFrom}~${meta.lastYear}년 상위 ${meta.sampleSize}건 / 전체 ${meta.recentTotal}건`,
+    부처: share(agg.byMinistry),
+    전문기관: share(agg.byOrderAgency),
+    수행주체: share(agg.byPerformer),
+    연구단계: share(agg.byPhase),
+    지역: share(agg.byRegion),
+    민간부담비율: agg.privateRatio === null ? '미상' : `${Math.round(agg.privateRatio * 100)}%`,
+    주요사업: agg.businesses.slice(0, 6).map(b => `${b.name}(${b.ministry}, ${Math.round(b.share * 100)}%, ${b.yearFrom || ''}~${b.yearTo || ''})`),
+    규칙기반신호: insights.map(i => i.text),
+  };
+  try {
+    const resp = await cerebrasChat({
+      model: getActiveCerebrasModel(),
+      messages: [
+        { role: 'system', content: '당신은 한국 국가R&D 정책 기획 전문가입니다. 주어진 수치만 근거로 쓰고, 수치에 없는 사실은 추측하지 않습니다. 한국어로 답합니다.' },
+        { role: 'user', content: `아래는 "${meta.query}" 분야 NTIS 국가R&D 과제 집계입니다.\n${JSON.stringify(facts)}\n\nR&D 정책 수립·신규사업 기획 담당자에게 줄 시사점 4개를 작성하세요. 투자 공백, 중복 위험(기존 주요 사업과 겹칠 부분), 신규사업 기회, 추가로 확인할 점을 다루세요. 각 항목은 "- "로 시작하는 1~2문장이며, 근거 수치를 괄호로 인용하세요. 주요사업의 연도 범위는 같은 사업의 다년 계속 지원이므로 그 자체를 중복으로 보지 마세요(중복 위험은 서로 다른 사업·부처가 같은 대상을 다룰 때입니다). 목록 외 다른 문장은 쓰지 마세요.` },
+      ],
+      temperature: 0.3,
+      reasoning_effort: 'low',
+      max_tokens: 2000,
+    }, 45000);
+    if (runSeq !== _investRunSeq) return;
+    if (!resp.ok) throw new Error(`AI ${resp.status}`);
+    const data = await resp.json();
+    const raw = String(data?.choices?.[0]?.message?.content || '').trim();
+    const lines = raw.split(/\r?\n/).map(l => l.replace(/^\s*(?:[-•*]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+    if (!lines.length) throw new Error('빈 응답');
+    body.innerHTML = `<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;">
+      ${lines.slice(0, 6).map(l => `<li style="line-height:1.6;color:#344054;">• ${escHtml(l.replace(/\*\*/g, ''))}</li>`).join('')}
+    </ul>
+    <div style="font-size:10.5px;color:#98a2b3;margin-top:8px;">AI가 위 집계 수치로 작성한 초안입니다. 정책 문서에 쓰기 전 원자료로 확인하세요.</div>`;
+  } catch (err) {
+    if (runSeq !== _investRunSeq) return;
+    body.textContent = err.message === 'GEMINI_CONSENT_DECLINED'
+      ? 'Gemini 사용을 승인하지 않아 AI 요약을 생략했습니다. 위 데이터 기반 신호를 참고하세요.'
+      : `AI 요약을 만들지 못했습니다 (${err.message}). 위 데이터 기반 신호를 참고하세요.`;
+  }
+}
