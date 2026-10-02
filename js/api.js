@@ -103,9 +103,13 @@
             case 'E4103':
               // 토큰 만료: 갱신에 성공했을 때만 1회 재시도. 갱신 실패이거나 이미 재시도한
               // 상태면 중단한다 (무한 재귀 → 요청 폭주 → E4290 방지).
-              if (STATE.refreshToken && !_isRetry) {
-                const ok = await refreshAccessToken();
-                if (ok) { doSearch(page, true); return; }
+              // refresh token도 무효(다른 곳에서 새 토큰을 발급하면 이전 토큰이 무효화됨)이면
+              // 서버 자격증명으로 새로 발급받는다 (분석 기능과 동일한 refreshTokenOnce 경로).
+              if (!_isRetry) {
+                const prevToken = STATE.token;
+                const ok = STATE.refreshToken ? await refreshAccessToken() : false;
+                if (!ok) await refreshTokenOnce();
+                if (ok || STATE.token !== prevToken) { doSearch(page, true); return; }
               }
               showToast('Access Token이 만료됐습니다. 잠시 후 다시 시도해 주세요 (E4103)', 'error');
               break;
