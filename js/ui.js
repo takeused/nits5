@@ -876,7 +876,7 @@
 
         // [DEBUG] NTIS 응답 저장 (디버그 패널용)
         // (원문 전체 콘솔 출력은 제거 — 필요하면 콘솔에서 window._ntisDebug 확인)
-        window._ntisDebug = { url, raw: text };
+        window._ntisDebug = { url: url.replace(/apprvKey=[^&]*/, 'apprvKey=***'), raw: text };
 
         const parser = new DOMParser();
         const xml = parser.parseFromString(text, 'text/xml');
@@ -903,6 +903,26 @@
            </div>`;
            setLoading(false);
            return;
+        }
+
+        // NTIS는 displayCnt와 무관하게 페이지당 10건만 준다. 사용자가 고른 건수(20/50/100)를
+        // 채우도록 다음 10건 페이지들을 이어 받아 첫 응답의 결과 목록에 붙인다.
+        // (startPosition은 위에서 rowCount 기준으로 계산되므로 페이지 번호와 건수가 일치한다)
+        const firstHits = xml.getElementsByTagName('HIT');
+        const totalHits = parseInt(gx('TOTALHITS'), 10) || 0;
+        if (rowCount > NTIS_PAGE_SIZE && firstHits.length === NTIS_PAGE_SIZE) {
+          const hitParent = firstHits[0].parentNode;
+          for (let next = startPosition + NTIS_PAGE_SIZE;
+               next < startPosition + rowCount && next <= totalHits;
+               next += NTIS_PAGE_SIZE) {
+            params.set('startPosition', next);
+            const more = await fetch(`${proxyBase === null ? `${NTIS_BASE}/rndopen/openApi/totalRstSearch` : `${proxyBase}/ntis`}?${params.toString()}`);
+            if (!more.ok) break;
+            const moreXml = new DOMParser().parseFromString(await more.text(), 'text/xml');
+            const moreHits = Array.from(moreXml.getElementsByTagName('HIT'));
+            moreHits.forEach(h => hitParent.appendChild(xml.importNode(h, true)));
+            if (moreHits.length < NTIS_PAGE_SIZE) break;
+          }
         }
 
         renderNTISResults(xml, query, collection);
@@ -4517,7 +4537,11 @@ Respond ONLY with:
     }
 
     // ── Step 2: NTIS 과제 수집 ──────────────────────────────────
-    async function fetchNTISForBudget(keywords, rndPhase, bizSect, displayCnt = 100) {
+    // NTIS 과제검색은 displayCnt를 무시하고 한 번에 10건만 돌려준다(실측: 20/50/100 모두 HITS=10).
+    // 더 받으려면 startPosition(1, 11, 21…)으로 페이지를 넘겨야 한다.
+    const NTIS_PAGE_SIZE = 10;
+
+    async function fetchNTISForBudget(keywords, rndPhase, bizSect, maxPerKeyword = 50) {
       if (!STATE.ntisKey && !(PROXY_AVAILABLE && STATE.ntisConfigured)) throw new Error('NTIS API 인증키가 필요합니다. API 설정에서 입력해주세요.');
 
       // ACTIVE_PROXY='direct'(프록시 미감지) 시에도 Vercel 프록시로 폴백 시도
@@ -4527,108 +4551,104 @@ Respond ONLY with:
 
       const allItems = [];
       const seenIds = new Set();
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const maxPages = Math.max(1, Math.ceil(maxPerKeyword / NTIS_PAGE_SIZE));
 
-      for (const kw of keywords) {
-        addBudgetLog('🔍', `NTIS 검색: "${kw}"`);
+      // 한 페이지(10건) 조회. 429는 3회까지 재시도, NTIS 오류 코드는 throw(키워드 단위 catch에서 기록).
+      // addQuery는 사용하지 않음 — 형식 오류 시 API 0건 원인이 되므로 클라이언트 필터로만 처리
+      const fetchPage = async (kw, startPosition) => {
         const params = new URLSearchParams({
           apprvKey: STATE.ntisKey,
           collection: 'project',
           SRWR: kw,      // 최신 API 필수 파라미터 병행
           query: kw,     // 하위 호환성용
-          displayCnt: displayCnt,
-          startPosition: 1,
+          displayCnt: NTIS_PAGE_SIZE,
+          startPosition,
           searchRnkn: 'Y',
           naviCount: 5,
         });
-
-        // addQuery는 사용하지 않음 — 형식 오류 시 API 0건 원인이 되므로 클라이언트 필터로만 처리
-
-        const sleep = ms => new Promise(r => setTimeout(r, ms));
-        let tries = 0;
-        let resp;
-        
-        while (tries < 3) {
+        let resp = null;
+        for (let tries = 0; tries < 3; tries++) {
           try {
             resp = await fetch(`${proxyBase}/ntis?${params.toString()}`, { signal: AbortSignal.timeout(12000) });
-            if (resp.status === 429) {
-              addBudgetLog('⏳', `API 부하(429) 발생 → 재시도 준비 (${tries + 1}/3)`);
-              await sleep(600 + Math.random() * 400);
-              tries++;
-              continue;
-            }
-            break;
-          } catch (e) {
-            tries++;
+            if (resp.status !== 429) break;
+            addBudgetLog('⏳', `API 부하(429) 발생 → 재시도 준비 (${tries + 1}/3)`);
+            await sleep(600 + Math.random() * 400);
+          } catch {
+            resp = null;
             await sleep(500);
           }
         }
+        if (!resp || !resp.ok) return { error: `HTTP 오류: ${resp ? resp.status : '응답 없음'}` };
+
+        const text = await resp.text();
+        const xml = new DOMParser().parseFromString(text, 'text/xml');
+        if (xml.getElementsByTagName('parsererror').length > 0) {
+          return { error: 'XML 파싱 실패 — 유효하지 않은 응답', text };
+        }
+
+        // NTIS API 오류 코드 감지 (일반 검색과 동일하게 처리)
+        const gxErr = (tag) => xml.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
+        const errCode = gxErr('CODE') || gxErr('returnCode');
+        const errMsg  = gxErr('MESSAGE') || gxErr('returnMsg');
+        if (errCode && errCode !== '0') {
+          addBudgetLog('❌', `NTIS API 오류 [${errCode}]: ${errMsg}`);
+          throw new Error(`NTIS API 오류 [${errCode}]: ${errMsg}`);
+        }
+
+        // HIT 태그 폴백 (NTIS 응답 구조 변형 대응)
+        let hits = Array.from(xml.getElementsByTagName('HIT'));
+        if (hits.length === 0) hits = Array.from(xml.getElementsByTagName('item'));
+        if (hits.length === 0) hits = Array.from(xml.getElementsByTagName('row'));
+        if (hits.length === 0) hits = Array.from(xml.getElementsByTagName('record'));
+        const totalHits = parseInt(gxErr('TOTALHITS') || gxErr('totalCount'), 10) || 0;
+        return { xml, text, hits, totalHits };
+      };
+
+      // 키워드 하나에 대해 최대 maxPages 페이지까지 모은다. 마지막 페이지(10건 미만)나 전체 건수에 닿으면 중단.
+      const collectHits = async (kw) => {
+        const hits = [];
+        let first = null;
+        let pages = 0;
+        for (let page = 0; page < maxPages; page++) {
+          const res = await fetchPage(kw, page * NTIS_PAGE_SIZE + 1);
+          if (res.error) {
+            addBudgetLog('⚠️', `"${kw}" ${res.error}${page > 0 ? ` (${page + 1}페이지)` : ''}`);
+            if (res.text) addBudgetLog('🔍', `RAW 응답: ${res.text.substring(0, 300)}`);
+            break;
+          }
+          if (!first) first = res;
+          pages++;
+          hits.push(...res.hits);
+          await sleep(150);   // 연속 호출 방지
+          if (res.hits.length < NTIS_PAGE_SIZE || hits.length >= res.totalHits) break;
+        }
+        return { hits, first, pages };
+      };
+
+      for (const kw of keywords) {
+        addBudgetLog('🔍', `NTIS 검색: "${kw}"`);
 
         try {
-          if (!resp || !resp.ok) {
-            addBudgetLog('⚠️', `"${kw}" HTTP 오류: ${resp ? resp.status : '응답 없음'}`);
-            continue;
-          }
-          const text = await resp.text();
-          const xml = new DOMParser().parseFromString(text, 'text/xml');
-
-          // XML 파싱 오류 감지
-          if (xml.getElementsByTagName('parsererror').length > 0) {
-            addBudgetLog('⚠️', `"${kw}" XML 파싱 실패 — 유효하지 않은 응답`);
-            addBudgetLog('🔍', `RAW 응답: ${text.substring(0, 300)}`);
-            continue;
-          }
-
-          // NTIS API 오류 코드 감지 (일반 검색과 동일하게 처리)
-          const gxErr = (tag) => xml.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
-          const errCode = gxErr('CODE') || gxErr('returnCode');
-          const errMsg  = gxErr('MESSAGE') || gxErr('returnMsg');
-          if (errCode && errCode !== '0') {
-            addBudgetLog('❌', `NTIS API 오류 [${errCode}]: ${errMsg}`);
-            throw new Error(`NTIS API 오류 [${errCode}]: ${errMsg}`);
-          }
-
-          // HIT 태그 폴백 (NTIS 응답 구조 변형 대응)
-          let items = Array.from(xml.getElementsByTagName('HIT'));
-          if (items.length === 0) items = Array.from(xml.getElementsByTagName('item'));
-          if (items.length === 0) items = Array.from(xml.getElementsByTagName('row'));
-          if (items.length === 0) items = Array.from(xml.getElementsByTagName('record'));
+          let { hits: items, first, pages } = await collectHits(kw);
+          if (!first) continue;   // 첫 페이지부터 실패 — 위에서 사유를 기록함
 
           // [PATCH] 공백이 포함된 검색어인데 결과가 0건인 경우, 띄어쓰기를 무시하고 검색 시도 (NTIS 특성 대응)
           if (items.length === 0 && kw.includes(' ')) {
             const noSpaceKw = kw.replace(/\s+/g, '');
             addBudgetLog('🔍', `결과 0건 → 띄어쓰기 제거 재검색: "${noSpaceKw}"`);
-            params.set('query', noSpaceKw);
-            params.set('SRWR', noSpaceKw);
-            
-            let resp2 = await fetch(`${proxyBase}/ntis?${params.toString()}`, { signal: AbortSignal.timeout(12000) });
-            if (resp2.status === 429) {
-              await sleep(800);
-              resp2 = await fetch(`${proxyBase}/ntis?${params.toString()}`, { signal: AbortSignal.timeout(12000) });
-            }
-
-            if (resp2 && resp2.ok) {
-              const text2 = await resp2.text();
-              const xml2 = new DOMParser().parseFromString(text2, 'text/xml');
-              items = Array.from(xml2.getElementsByTagName('HIT'));
-              if (items.length === 0) items = Array.from(xml2.getElementsByTagName('item'));
-              if (items.length === 0) items = Array.from(xml2.getElementsByTagName('row'));
-              if (items.length === 0) items = Array.from(xml2.getElementsByTagName('record'));
-            }
+            const retry = await collectHits(noSpaceKw);
+            if (retry.first) ({ hits: items, first, pages } = retry);
           }
-          
-          // 수집 전 약간의 지연 (연속 호출 방지)
-          await sleep(150);
 
           // 아이템이 0건인 경우 진단용 RAW 응답 출력
           if (items.length === 0) {
-            const rootTag = xml.documentElement?.tagName || '(없음)';
-            const totalHits = xml.getElementsByTagName('TOTALHITS')[0]?.textContent?.trim()
-                           || xml.getElementsByTagName('totalCount')[0]?.textContent?.trim() || '?';
-            addBudgetLog('⚠️', `"${kw}" 0건 — XML 루트: <${rootTag}>, TOTALHITS: ${totalHits}`);
-            addBudgetLog('🔍', `RAW: ${text.substring(0, 500)}`);
+            const rootTag = first.xml.documentElement?.tagName || '(없음)';
+            addBudgetLog('⚠️', `"${kw}" 0건 — XML 루트: <${rootTag}>, TOTALHITS: ${first.totalHits || '?'}`);
+            addBudgetLog('🔍', `RAW: ${first.text.substring(0, 500)}`);
           }
 
-          addBudgetLog('📦', `"${kw}" → ${items.length}건 수집`);
+          addBudgetLog('📦', `"${kw}" → ${items.length}건 수집 (${pages}페이지, 전체 ${first.totalHits.toLocaleString()}건 중)`);
 
           for (let i = 0; i < items.length; i++) {
             const item = items[i];
@@ -4825,33 +4845,61 @@ Respond ONLY with:
       return result.items;
     }
 
+    // ── 과제명 핵심어 매칭 (관련성 게이트·관련성 정렬 공용) ─────────────
+    const BUDGET_STOP_WORDS = new Set(['개발','연구','고도화','구축','플랫폼','시스템','기반','기술','사업','과제']);
+    // 표본 보강 검색어(buildBudgetSearchKeywords)가 "AI"를 "인공지능"으로도 검색하므로,
+    // 게이트도 같은 동의어를 인정해야 그 검색 결과가 무관 과제로 버려지지 않는다.
+    const BUDGET_TOKEN_ALIASES = {
+      'ai': ['인공지능'], '인공지능': ['ai'],
+      '배터리': ['이차전지', '2차전지'], '이차전지': ['배터리', '2차전지'], '2차전지': ['이차전지', '배터리'],
+    };
+
+    function budgetCoreTokens(projName) {
+      return [...new Set(String(projName || '').toLowerCase().split(/[\s,·/()_-]+/)
+        .filter(token => token.length >= 2 && !BUDGET_STOP_WORDS.has(token)))];
+    }
+
+    // 한글이 섞인 토큰은 부분 일치(조사·복합어 대응), 영문·숫자만인 토큰은 단어 경계로 일치시킨다.
+    // (부분 일치면 "AI"가 "explainable"·"training" 같은 영어 단어 속 ai에도 걸린다)
+    function budgetTokenIn(hay, token) {
+      const forms = [token, ...(BUDGET_TOKEN_ALIASES[token] || [])];
+      return forms.some(form => /[가-힣]/.test(form)
+        ? hay.includes(form)
+        : new RegExp(`(^|[^a-z0-9])${escRegex(form)}([^a-z0-9]|$)`).test(hay));
+    }
+
+    // NTIS 과제명에는 검색 하이라이트 태그(<span class="search_word">)가 섞여 오므로 제거 후 비교한다.
+    function budgetHaystack(item, abstractChars = 0) {
+      const text = String(item?.projNm || '') + (abstractChars ? ' ' + String(item?.absContent || '').substring(0, abstractChars) : '');
+      return text.replace(/<[^>]*>/g, ' ').toLowerCase();
+    }
+
     // 폴백 광역 검색으로 유입된 무관 과제를 이상치 제거 전에 걸러낸다(B-5).
-    // 관련 표본이 최소 5건 확보될 때만 적용(과잉 필터로 표본이 소멸하는 것 방지).
+    // 관련 과제가 3건 이상이면 관련 과제만 남긴다. 그보다 적으면 표본이 소멸하므로
+    // 전체를 유지하되, 무관 과제가 섞였다는 사실을 로그로 분명히 남긴다.
+    const BUDGET_MIN_RELEVANT = 3;
     function applyBudgetRelevanceGate(items, projName) {
-      const stop = ['개발','연구','고도화','구축','플랫폼','시스템','기반','기술','사업','과제'];
-      const coreTokens = String(projName || '').split(/[\s,·/()]+/).filter(w => w.length >= 2 && !stop.includes(w));
+      const coreTokens = budgetCoreTokens(projName);
       if (!coreTokens.length) return items;
-      const isRelevant = (it) => {
-        const hay = ((it.projNm || '') + ' ' + (it.absContent || '').substring(0, 300)).toLowerCase();
-        return coreTokens.some(t => hay.includes(t.toLowerCase()));
-      };
-      const relevant = items.filter(isRelevant);
-      if (relevant.length >= 5 && relevant.length < items.length) {
-        addBudgetLog('🧹', `관련성 게이트: 핵심어 무관 ${items.length - relevant.length}건 제외 (${relevant.length}건 유지)`);
+      const relevant = items.filter(it => {
+        const hay = budgetHaystack(it, 300);
+        return coreTokens.some(token => budgetTokenIn(hay, token));
+      });
+      if (relevant.length === items.length) return items;
+      if (relevant.length >= BUDGET_MIN_RELEVANT) {
+        addBudgetLog('🧹', `관련성 게이트: 핵심어(${coreTokens.join(', ')}) 무관 ${items.length - relevant.length}건 제외 (${relevant.length}건 유지)`);
         return relevant;
       }
+      addBudgetLog('⚠️', `관련성 게이트: 핵심어가 들어간 과제가 ${relevant.length}건뿐이라 필터를 적용하지 않음 — 무관 과제 ${items.length - relevant.length}건이 섞여 있을 수 있습니다`);
       return items;
     }
 
     // ── Step 4: AI 유사도 평가 ───────────────────────────────────
     function budgetLexicalRelevance(projName, item) {
-      const stop = new Set(['개발','연구','고도화','구축','플랫폼','시스템','기반','기술','사업','과제']);
-      const tokens = String(projName || '').toLowerCase().split(/[\s,·/()_-]+/)
-        .filter(token => token.length >= 2 && !stop.has(token));
+      const tokens = budgetCoreTokens(projName);
       if (!tokens.length) return 0;
-      const title = String(item?.projNm || '').toLowerCase();
-      const matches = tokens.filter(token => title.includes(token));
-      return matches.length / tokens.length;
+      const title = budgetHaystack(item);
+      return tokens.filter(token => budgetTokenIn(title, token)).length / tokens.length;
     }
 
     async function aiSimilarityEval(projName, items) {

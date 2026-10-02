@@ -307,6 +307,24 @@ test('commerce ranking never backfills candidates removed by diversity rules', (
   assert.equal(ranked.eliminated.length, 2);
 });
 
+test('budget relevance matches Latin tokens as whole words and honors AI/인공지능 aliases', () => {
+  const context = createBrowserContext();
+  loadScript(context, 'js/state.js');
+  loadScript(context, 'js/commerce-score.js');
+  loadScript(context, 'js/budget-core.js');
+  loadScript(context, 'js/ui.js');
+
+  const rel = (title) => context.budgetLexicalRelevance('AI 기반 재난안전 플랫폼 개발', { projNm: title });
+  // "explainable"·"training" 속 ai는 AI로 보지 않는다
+  assert.equal(rel('explainable training framework'), 0);
+  // 조사가 붙은 AI, 하이라이트 태그로 감싼 AI, 동의어 인공지능은 인정한다
+  assert.equal(rel('AI를 활용한 홍수 예측'), 0.5);
+  assert.equal(rel('<span class="search_word">AI</span> 재난안전 관제'), 1);
+  assert.equal(rel('인공지능 재난안전 상황판'), 1);
+  // 태그 속성(class="search_word")이 영문 토큰과 맞지 않도록 태그는 제거된다
+  assert.equal(context.budgetLexicalRelevance('search', { projNm: '<span class="search_word">검색</span> 엔진' }), 0);
+});
+
 test('commerce detail report reuses the ranked gap indicator instead of a conflicting formula', () => {
   const ui = fs.readFileSync(path.join(ROOT, 'js/ui.js'), 'utf8');
   assert.match(ui, /analysisMeta\?\.indicators\?\.components\?\.gapSignal/);
