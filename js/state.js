@@ -65,7 +65,8 @@
     // 우선순위: URL 파라미터(?proxy=https://...) > localStorage('sc_proxy_url') > 기본값.
     // 기본값이 비어 있으면 같은 오리진(Vercel 서버리스 /health·/api …)으로 폴백한다.
     const TUNNEL_DEFAULT = ''; // 예: 'https://scienceon.ngrok-free.app'
-    const VERCEL_BASE = (() => {
+    // let: 저장된 터널이 죽었으면 checkProxy()가 /tunnel 등록소에서 새 주소를 받아 교체한다.
+    let VERCEL_BASE = (() => {
       const clean = (u) => (u || '').trim().replace(/\/+$/, '');
       try {
         const p = new URLSearchParams(location.search).get('proxy');
@@ -105,11 +106,12 @@
 
     // 터널 프록시로 가는 모든 fetch에 접속 키 헤더를 붙인다.
     // (호출부가 수십 곳이라 개별 수정 대신 여기서 한 번에 처리)
-    if (PROXY_KEY && VERCEL_BASE && typeof window.fetch === 'function') {
+    // VERCEL_BASE는 실행 중 바뀔 수 있으므로 호출 시점의 값으로 비교한다.
+    if (PROXY_KEY && typeof window.fetch === 'function') {
       const nativeFetch = window.fetch.bind(window);
       window.fetch = (input, init = {}) => {
         const target = typeof input === 'string' ? input : (input && input.url) || '';
-        if (target.startsWith(`${VERCEL_BASE}/`)) {
+        if (VERCEL_BASE && target.startsWith(`${VERCEL_BASE}/`)) {
           const headers = new Headers(init.headers || (typeof input === 'object' && input.headers) || undefined);
           headers.set('X-Proxy-Token', PROXY_KEY);
           return nativeFetch(input, { ...init, headers });

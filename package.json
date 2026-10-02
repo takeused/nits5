@@ -1,0 +1,8 @@
+{
+  "name": "nits5",
+  "private": true,
+  "description": "Vercel 서버리스 함수 의존성 (api/tunnel.js의 Blob 저장소 접근용)",
+  "dependencies": {
+    "@vercel/blob": "^2.0.0"
+  }
+}

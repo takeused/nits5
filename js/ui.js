@@ -122,7 +122,31 @@
         }
       } catch { /* 로컬 없음 */ }
 
-      // 2순위: Vercel Serverless (Seoul icn1 고정 리전 — NTIS IP 화이트리스트 등록 가능)
+      // 2순위: 터널(승인 PC) → 없으면 Vercel Serverless
+      // 저장된 터널 주소가 없거나 응답이 없으면(터널 재시작으로 주소 변경) /tunnel 등록소에서
+      // 승인 PC가 등록해 둔 최신 주소를 받아 교체한다 → 사용자는 nits5.vercel.app만 열면 된다.
+      const tunnelAlive = async (base) => {
+        if (!base) return false;
+        try {
+          const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(5000) });
+          return r.ok;
+        } catch { return false; }
+      };
+      if (!(await tunnelAlive(VERCEL_BASE))) {
+        try {
+          const r = await fetch('/tunnel', { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+          const reg = r.ok ? await r.json() : null;
+          const fresh = (reg?.url || '').replace(/\/+$/, '');
+          if (fresh && fresh !== VERCEL_BASE && await tunnelAlive(fresh)) {
+            VERCEL_BASE = fresh;
+            try { localStorage.setItem('sc_proxy_url', fresh); } catch { /* 저장 실패 무시 */ }
+          } else if (VERCEL_BASE) {
+            VERCEL_BASE = '';   // 살아있는 터널이 없으면 같은 오리진(Vercel 서버리스)으로 폴백
+          }
+        } catch {
+          VERCEL_BASE = '';     // 등록소 없음(로컬 등) → 같은 오리진으로 폴백
+        }
+      }
       try {
         const res = await fetch(`${VERCEL_BASE}/health`, { signal: AbortSignal.timeout(5000) });
         if (res.ok) {

@@ -2,6 +2,7 @@
   "version": 2,
   "regions": ["icn1"],
   "rewrites": [
+    { "source": "/tunnel", "destination": "/api/tunnel" },
     { "source": "/api", "destination": "/api/proxy" },
     { "source": "/health", "destination": "/api/proxy" },
     { "source": "/myip", "destination": "/api/proxy" },
