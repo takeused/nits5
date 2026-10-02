@@ -13,8 +13,9 @@ function aesEncryptOfficial(plaintext, keyStr) {
   const iv  = Buffer.from(FIXED_IV, 'utf8');
   const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  // ScienceON API expects IV prepended: IV(16) || ciphertext
-  return Buffer.concat([iv, encrypted]).toString('base64');
+  // 로컬 프록시(proxy-server.js)에서 실측 확인된 방식과 동일하게: IV 프리펜드 없이 ciphertext만,
+  // URL-safe base64. (IV를 앞에 붙이면 KISTI 복호화 실패로 E4006 발생)
+  return encrypted.toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 function nowDatetime14() {
@@ -289,7 +290,7 @@ module.exports = async (req, res) => {
           errorMessage: data.errorMessage || data.message || data.error || data.raw || '',
         });
         if (data.access_token) {
-          return jsonRes(res, 200, { success: true, mac, enc: 'AES-256-CBC/Base64/URIEncoded', ...data, results });
+          return jsonRes(res, 200, { success: true, mac, enc: 'fixed|noPre|url', ...data, results });
         }
       }
 

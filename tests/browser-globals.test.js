@@ -252,7 +252,8 @@ test('trend analysis loading and result views share the compact visual surface',
   assert.match(css, /\.trend-analysis-loading\s*\{/);
   assert.match(css, /same quiet graphite\/silver language/);
   assert.match(css, /linear-gradient\(135deg, #f8fafc 0%, #e4e7ec 100%\)/);
-  assert.match(chart, /rgba\(152,162,179,0\.72\)/);
+  // 특허 막대는 범례와 같은 주황색(f754199)
+  assert.match(chart, /rgba\(251,146,60,0\.8\)/);
 });
 
 test('trend quality helpers distinguish empty, partial, and reliable distributions', () => {

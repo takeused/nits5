@@ -159,12 +159,7 @@
       updateProxyStatus();
     }
 
-    function getProxyBase() {
-      if (ACTIVE_PROXY === 'local')  return PROXY_BASE;
-      if (ACTIVE_PROXY === 'vercel') return VERCEL_BASE;
-      if (ACTIVE_PROXY === 'worker') return CF_WORKER_BASE;
-      return null; // 직접 호출
-    }
+    // getProxyBase()/getApiBase()는 state.js에 정의되어 있다.
 
     function updateProxyStatus() {
       const dot = document.getElementById('statusDot');
@@ -231,11 +226,6 @@
         const serverHandlesAuth = PROXY_AVAILABLE && STATE.scienceOnConfigured;
         apiSettingsBtn.classList.toggle('hidden', serverHandlesAuth);
       }
-    }
-
-    function getApiBase() {
-      const base = getProxyBase();
-      return base !== null ? `${base}/api` : API_BASE_DIRECT;
     }
 
 
@@ -570,7 +560,8 @@
       // 2순위: 브라우저 입력 키로 직접 호출 (직접 모드 / 프록시에 키 없음)
       const cerebrasKey = normalizeCerebrasKey(STATE.cerebrasKey);
       if (!isValidCerebrasKey(cerebrasKey)) {
-        throw new Error(proxyBase === null ? 'AI_SERVER_UNAVAILABLE' : 'AI_KEY_INVALID');
+        // 키를 입력했는데 형식이 틀리면 키 오류, 키도 없고 프록시도 없으면 AI 서버 없음으로 구분한다.
+        throw new Error(cerebrasKey || proxyBase !== null ? 'AI_KEY_INVALID' : 'AI_SERVER_UNAVAILABLE');
       }
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -860,9 +851,8 @@
         const text = await resp.text();
 
         // [DEBUG] NTIS 응답 저장 (디버그 패널용)
+        // (원문 전체 콘솔 출력은 제거 — 필요하면 콘솔에서 window._ntisDebug 확인)
         window._ntisDebug = { url, raw: text };
-        console.log('[NTIS-DEBUG] URL:', url);
-        console.log('[NTIS-DEBUG] RAW TEXT:', text);
 
         const parser = new DOMParser();
         const xml = parser.parseFromString(text, 'text/xml');
@@ -885,7 +875,7 @@
                <code class="text-green-400 block mt-1">node proxy-server.js</code>
                <p class="text-gray-500 mt-1">실행 후 페이지를 새로고침하면 로컬 프록시(127.0.0.1:3737)로 자동 전환됩니다.</p>
              </div>` : ''}
-             <p class="text-xs text-gray-600 mt-3 break-all">요청 URL: ${escHtml(url)}</p>
+             <p class="text-xs text-gray-600 mt-3 break-all">요청 URL: ${escHtml(url.replace(/apprvKey=[^&]*/, 'apprvKey=***'))}</p>
            </div>`;
            setLoading(false);
            return;
@@ -1169,7 +1159,7 @@
         const searchQuery = JSON.stringify({ BI: mainQuery });
         // 토큰은 매 시도마다 STATE에서 다시 읽는다(갱신 후 재시도에 새 토큰이 반영되도록).
         const attempt = async () => {
-          const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${n}`;
+          const url = `${getApiBase()}?client_id=${encodeURIComponent(STATE.clientId)}&token=${encodeURIComponent(STATE.token)}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${n}`;
           const resp = await fetchWithRetry429(url, { timeout: 8000 });
           const text = await resp.text();
           const xml = new DOMParser().parseFromString(text, 'text/xml');
@@ -1796,7 +1786,7 @@ Respond ONLY with this JSON structure:
         // 토큰은 매 시도마다 STATE에서 다시 읽는다(갱신 후 재시도에 새 토큰이 반영되도록).
         const attempt = async () => {
           const searchQuery = JSON.stringify({ BI: query });
-          const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${rowCount}`;
+          const url = `${getApiBase()}?client_id=${encodeURIComponent(STATE.clientId)}&token=${encodeURIComponent(STATE.token)}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${rowCount}`;
           const resp = await fetchWithRetry429(url, { timeout: 10000 });
           const text = await resp.text();
           if (!resp.ok) return { result: { xml: null, metric: metric(0, 'error', { error: `HTTP ${resp.status}` }) } };
@@ -1968,7 +1958,7 @@ Respond ONLY with this JSON structure:
       const quickArtiCount = async (kw) => {
         const attempt = async () => {
           const q = JSON.stringify({ BI: kw });
-          const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=ARTI&searchQuery=${encodeURIComponent(q)}&rowCount=1`;
+          const url = `${getApiBase()}?client_id=${encodeURIComponent(STATE.clientId)}&token=${encodeURIComponent(STATE.token)}&version=1.0&action=search&target=ARTI&searchQuery=${encodeURIComponent(q)}&rowCount=1`;
           const resp = await fetchWithRetry429(url, { timeout: 8000 });
           if (!resp.ok) return { count: null };
           const xml = new DOMParser().parseFromString(await resp.text(), 'text/xml');
@@ -2009,7 +1999,7 @@ Respond ONLY with this JSON structure:
         const q = JSON.stringify({ BI: kw, PY: String(year) });
         // 토큰은 매 시도마다 STATE에서 다시 읽는다(갱신 후 재시도에 새 토큰이 반영되도록).
         const attempt = async () => {
-          const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=ARTI&searchQuery=${encodeURIComponent(q)}&rowCount=1`;
+          const url = `${getApiBase()}?client_id=${encodeURIComponent(STATE.clientId)}&token=${encodeURIComponent(STATE.token)}&version=1.0&action=search&target=ARTI&searchQuery=${encodeURIComponent(q)}&rowCount=1`;
           const resp = await fetchWithRetry429(url, { timeout: 10000 });
           if (!resp.ok) return { result: { value: 0, status: 'error' } };
           const xml = new DOMParser().parseFromString(await resp.text(), 'text/xml');
@@ -2550,7 +2540,7 @@ Respond ONLY with this JSON structure:
         // ScienceON API 호출 (count + top 결과)
         const fetchScienceON = async (target, rowCount = 1) => {
           const searchQuery = JSON.stringify({ BI: query });
-          const url = `${getApiBase()}?client_id=${STATE.clientId}&token=${STATE.token}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${rowCount}`;
+          const url = `${getApiBase()}?client_id=${encodeURIComponent(STATE.clientId)}&token=${encodeURIComponent(STATE.token)}&version=1.0&action=search&target=${target}&searchQuery=${encodeURIComponent(searchQuery)}&rowCount=${rowCount}`;
           const resp = await fetch(url);
           const text = await resp.text();
           return new DOMParser().parseFromString(text, 'text/xml');
@@ -4740,7 +4730,8 @@ Respond ONLY with:
 
       const groups = new Map();
       for (const it of items) {
-        const key = normKey(it.projNm);   // 과제명만으로 병합 (사업명 무시)
+        // 과제명만으로 병합 (사업명 무시). 제목이 비면 모두 ''로 묶이므로 과제 식별자로 개별 유지한다.
+        const key = normKey(it.projNm) || `__id:${it.pjtId}`;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(it);
       }

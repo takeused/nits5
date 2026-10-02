@@ -30,6 +30,12 @@ test('NTIS 연구비의 쉼표와 한글 금액 단위를 해석한다', () => {
   assert.equal(parseMoneyValue('12억 원'), 1_200_000_000);
 });
 
+test('여러 단위가 섞인 금액은 모두 합산한다', () => {
+  assert.equal(parseMoneyValue('1억 5천만원'), 150_000_000);
+  assert.equal(parseMoneyValue('2억3,000만원'), 230_000_000);
+  assert.equal(parseMoneyValue('1억 2천 만원'), 120_000_000);
+});
+
 test('당해연도 연구비를 총연구비보다 우선 사용한다', () => {
   const result = normalizeAnnualBudget({
     currentYearFunds: 120_000_000,

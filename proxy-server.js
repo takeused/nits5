@@ -24,6 +24,25 @@ if (fs.existsSync(envPath)) {
     const value = line.slice(idx + 1).trim().replace(/^['"]|['"]$/g, '');
     if (key && process.env[key] === undefined) process.env[key] = value;
   }
+  console.log('[.env] 로드됨');
+}
+
+// ── TLS: Windows 시스템 인증서 저장소 신뢰 ─────────────────────────
+// 회사망 SSL 검사(Somansa 등)는 사내 루트 인증서로 HTTPS를 다시 서명한다. 이 인증서는
+// Windows 저장소에만 있어 Node 기본 CA로는 검증이 실패하므로, 시스템 저장소를 기본 CA에 더한다.
+// (검증 자체를 끄면 토큰·API 키가 오가는 요청이 중간자 공격에 노출된다)
+try {
+  const tls = require('tls');
+  if (typeof tls.setDefaultCACertificates === 'function' && typeof tls.getCACertificates === 'function') {
+    tls.setDefaultCACertificates([
+      ...tls.getCACertificates('default'),
+      ...tls.getCACertificates('system'),
+    ]);
+  } else {
+    console.warn('[TLS] 이 Node 버전은 시스템 인증서 로드를 지원하지 않습니다. 회사망에서 HTTPS 오류가 나면 Node 24 이상으로 업데이트하세요.');
+  }
+} catch (e) {
+  console.warn('[TLS] 시스템 인증서 로드 실패:', e.message);
 }
 
 // ── 정적 파일 서빙 (인트라넷 접속용) ────────────────────────────
@@ -45,23 +64,6 @@ const NTIS_HOST = 'www.ntis.go.kr';
 const FIXED_IV  = 'jvHJ1EFA0IXBrxxz';
 // Gemini 모델명은 .env의 GEMINI_MODEL로 덮어쓸 수 있다(모델 개편 시 코드 수정 불필요).
 const GEMINI_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
-
-// ── .env 로더 (의존성 없이 KEY=VALUE 파싱, 소스에 비밀값을 넣지 않기 위함) ──
-// 프로젝트 폴더의 .env 파일을 읽어 아직 설정되지 않은 환경변수만 주입한다.
-(function loadDotEnv() {
-  try {
-    const envPath = path.join(__dirname, '.env');
-    if (!fs.existsSync(envPath)) return;
-    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.*)\s*$/);
-      if (!m || line.trim().startsWith('#')) continue;
-      const key = m[1];
-      const val = m[2].trim().replace(/^["']|["']$/g, '');
-      if (process.env[key] === undefined) process.env[key] = val;
-    }
-    console.log('[.env] 로드됨');
-  } catch { /* .env 없거나 읽기 실패 시 무시 */ }
-})();
 
 // ── 터널(외부) 요청 인증 ─────────────────────────────────────────
 // Cloudflare 터널로 들어온 요청은 cloudflared가 Cf-Connecting-Ip/Cf-Ray 헤더를 붙인다.
@@ -137,7 +139,6 @@ function httpsGet(hostname, path, headers = {}) {
   return new Promise((resolve, reject) => {
     const req = https.request({
       hostname, path, method: 'GET',
-      rejectUnauthorized: false,
       headers: { 'User-Agent': 'ScienceON-LocalProxy/1.0', Accept: '*/*', ...headers },
     }, (res) => {
       const chunks = [];
@@ -434,7 +435,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/token/probe') {
       const { client_id, api_key, mac_address } = q;
       if (!client_id || !api_key || !mac_address) {
-        return sendJSON(res, 400, { error: 'client_id, api_key, mac_address ?꾩슂' });
+        return sendJSON(res, 400, { error: 'client_id, api_key, mac_address 필요' });
       }
 
       const raw = String(mac_address);

@@ -14,6 +14,14 @@
   function parseMoneyValue(value) {
     if (typeof value === 'number') return positiveNumber(value);
     const text = String(value || '').replace(/,/g, '').trim();
+    // "1억 5천만원"처럼 단위가 여러 개 섞인 표기는 숫자+단위 쌍을 모두 더한다.
+    // (첫 숫자만 읽으면 1억으로 잘려 5천만원이 누락된다)
+    const UNIT = { '억': 100000000, '천만': 10000000, '백만': 1000000, '만': 10000, '천': 1000 };
+    const pairs = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(억|천\s*만|백\s*만|만|천)/g)];
+    if (pairs.length > 1 && !/-/.test(text)) {
+      const sum = pairs.reduce((acc, [, num, unit]) => acc + Number(num) * UNIT[unit.replace(/\s+/g, '')], 0);
+      return Number.isFinite(sum) && sum > 0 ? sum : 0;
+    }
     const match = text.match(/-?\d+(?:\.\d+)?/);
     if (!match) return 0;
     const number = Number(match[0]);
