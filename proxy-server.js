@@ -64,6 +64,8 @@ const NTIS_HOST = 'www.ntis.go.kr';
 const FIXED_IV  = 'jvHJ1EFA0IXBrxxz';
 // Gemini 모델명은 .env의 GEMINI_MODEL로 덮어쓸 수 있다(모델 개편 시 코드 수정 불필요).
 const GEMINI_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
+// Groq 모델명은 .env의 GROQ_MODEL로 덮어쓸 수 있다.
+const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-120b';
 
 // ── 터널(외부) 요청 인증 ─────────────────────────────────────────
 // Cloudflare 터널로 들어온 요청은 cloudflared가 Cf-Connecting-Ip/Cf-Ray 헤더를 붙인다.
@@ -355,8 +357,10 @@ const server = http.createServer(async (req, res) => {
         status: 'ok',
         service: 'ScienceON Local Proxy',
         port: PORT,
-        aiConfigured: Boolean(process.env.CEREBRAS_API_KEY || process.env.GEMINI_API_KEY),
+        aiConfigured: Boolean(process.env.CEREBRAS_API_KEY || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY),
         cerebrasConfigured: Boolean(process.env.CEREBRAS_API_KEY),
+        groqConfigured: Boolean(process.env.GROQ_API_KEY),
+        groqModel: process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL,
         geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
         geminiModel: process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL,
         scienceOnConfigured: Boolean(REGISTERED.clientId && REGISTERED.apiKey && REGISTERED.macAddr),
@@ -371,6 +375,22 @@ const server = http.createServer(async (req, res) => {
       if (!apiKey) return sendJSON(res, 503, { error: 'CEREBRAS_API_KEY is not configured on the server' });
       const payload = await readJSONBody(req);
       const upstream = await httpsPostJSON('api.cerebras.ai', '/v1/chat/completions', payload, {
+        Authorization: `Bearer ${apiKey}`,
+      });
+      return sendRaw(res, upstream.status, upstream.body, 'application/json; charset=utf-8');
+    }
+
+    // ── /groq — Groq의 OpenAI 호환 엔드포인트. 요청·응답 형식이 /cerebras와 같다.
+    if (pathname === '/groq') {
+      if (req.method !== 'POST') return sendJSON(res, 405, { error: 'POST required' });
+      const apiKey = process.env.GROQ_API_KEY || '';
+      if (!apiKey) return sendJSON(res, 503, { error: 'GROQ_API_KEY is not configured on the server' });
+      const payload = await readJSONBody(req);
+      // 모델명은 서버가 정한다(브라우저가 보낸 Cerebras 모델명은 Groq에 없다).
+      payload.model = process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL;
+      // reasoning_effort는 gpt-oss 계열만 지원한다.
+      if (!/gpt-oss/.test(payload.model)) delete payload.reasoning_effort;
+      const upstream = await httpsPostJSON('api.groq.com', '/openai/v1/chat/completions', payload, {
         Authorization: `Bearer ${apiKey}`,
       });
       return sendRaw(res, upstream.status, upstream.body, 'application/json; charset=utf-8');

@@ -333,13 +333,13 @@ test('budget relevance gate prefers projects sharing every core keyword, then lo
   loadScript(context, 'js/ui.js');
 
   const make = (titles) => titles.map((projNm, i) => ({ projNm, pjtId: String(i) }));
-  const both = Array.from({ length: 8 }, (_, i) => `AI 재난안전 관제 ${i}`);
+  const both = Array.from({ length: 5 }, (_, i) => `AI 재난안전 관제 ${i}`);
   const aiOnly = Array.from({ length: 30 }, (_, i) => `AI 의료영상 진단 ${i}`);
 
-  // 둘 다 공유하는 과제가 8건 이상이면 그 과제들만으로 분포를 만든다
+  // 둘 다 공유하는 과제가 5건 이상이면 그 과제들만으로 분포를 만든다
   const strict = context.applyBudgetRelevanceGate(make([...both, ...aiOnly]), 'AI 기반 재난안전 플랫폼 개발');
   assert.equal(strict.tier, 'all');
-  assert.equal(strict.items.length, 8);
+  assert.equal(strict.items.length, 5);
 
   // 부족하면 핵심어 하나라도 공유하는 과제로 내려가고, 무관 과제는 여전히 뺀다
   const loose = context.applyBudgetRelevanceGate(make([...both.slice(0, 2), ...aiOnly.slice(0, 5), '해양 생태 조사']), 'AI 기반 재난안전 플랫폼 개발');
@@ -368,6 +368,35 @@ test('commerce analysis still renders diagnostics when no candidate passes forma
   assert.match(ui, /const hasRankedCandidates = top3\.length > 0/);
   assert.match(ui, /if \(hasRankedCandidates\) selectRankCard\(1\)/);
   assert.doesNotMatch(ui, /if \(!top3 \|\| top3\.length === 0\) \{[\s\S]{0,180}return;/);
+});
+
+test('auto AI routing falls back from Cerebras to Groq without asking for Gemini consent', async () => {
+  const context = createBrowserContext();
+  loadScript(context, 'js/state.js');
+  loadScript(context, 'js/commerce-score.js');
+  loadScript(context, 'js/budget-core.js');
+  loadScript(context, 'js/ui.js');
+
+  const called = [];
+  context.fetch = async (url) => {
+    called.push(String(url).replace(/^.*\//, '/'));
+    return String(url).endsWith('/groq')
+      ? { ok: true, status: 200, json: async () => ({}) }
+      : { ok: false, status: 404, json: async () => ({}) };
+  };
+  vm.runInContext(`ACTIVE_PROXY = 'local';
+    STATE.aiConfigured = true; STATE.cerebrasConfigured = true;
+    STATE.groqConfigured = true; STATE.geminiConfigured = true; STATE.aiProviderMode = 'auto';`, context);
+
+  const resp = await context.cerebrasChat({ messages: [] }, 1000);
+  assert.equal(resp.ok, true);
+  assert.deepEqual(called, ['/cerebras', '/groq']);
+
+  // Groq 강제는 Cerebras를 거치지 않는다
+  called.length = 0;
+  vm.runInContext("STATE.aiProviderMode = 'groq'", context);
+  await context.cerebrasChat({ messages: [] }, 1000);
+  assert.deepEqual(called, ['/groq']);
 });
 
 test('Cerebras browser requests extract an ASCII key from pasted descriptive text', async () => {

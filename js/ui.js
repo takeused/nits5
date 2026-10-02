@@ -115,6 +115,7 @@
           const data = await res.json().catch(() => ({}));
           STATE.aiConfigured = data.aiConfigured === true;
           STATE.cerebrasConfigured = data.cerebrasConfigured;
+          STATE.groqConfigured = data.groqConfigured === true;
           STATE.geminiConfigured = data.geminiConfigured === true;
           STATE.scienceOnConfigured = data.scienceOnConfigured === true;
           STATE.ntisConfigured = data.ntisConfigured === true;
@@ -153,6 +154,7 @@
           const data = await res.json().catch(() => ({}));
           STATE.aiConfigured = data.aiConfigured === true;
           STATE.cerebrasConfigured = data.cerebrasConfigured;
+          STATE.groqConfigured = data.groqConfigured === true;
           STATE.geminiConfigured = data.geminiConfigured === true;
           STATE.scienceOnConfigured = data.scienceOnConfigured === true;
           STATE.ntisConfigured = data.ntisConfigured === true;
@@ -168,6 +170,7 @@
             const data = await res.json().catch(() => ({}));
             STATE.aiConfigured = data.aiConfigured === true;
             STATE.cerebrasConfigured = data.cerebrasConfigured;
+            STATE.groqConfigured = data.groqConfigured === true;
             STATE.geminiConfigured = data.geminiConfigured === true;
             STATE.scienceOnConfigured = data.scienceOnConfigured === true;
             STATE.ntisConfigured = data.ntisConfigured === true;
@@ -201,7 +204,7 @@
         } else {
           aiStatus.textContent = STATE.aiConfigured
             ? '✅ 서버 AI 키가 안전하게 설정되어 있습니다.'
-            : '⚠️ 서버의 CEREBRAS_API_KEY 환경변수가 필요합니다.';
+            : '⚠️ 서버에 AI 키(CEREBRAS_API_KEY · GROQ_API_KEY · GEMINI_API_KEY 중 하나)가 필요합니다.';
         }
       }
 
@@ -278,7 +281,7 @@
               : '브라우저 개발용 Cerebras API 키를 입력하세요.'
           : STATE.aiConfigured
             ? '✅ 서버 AI 키가 안전하게 설정되어 있습니다.'
-            : '⚠️ 서버의 CEREBRAS_API_KEY 환경변수가 필요합니다.';
+            : '⚠️ 서버에 AI 키(CEREBRAS_API_KEY · GROQ_API_KEY · GEMINI_API_KEY 중 하나)가 필요합니다.';
       }
       document.getElementById('tokenReqResult').classList.add('hidden');
       document.getElementById('settingsModal').classList.remove('hidden');
@@ -383,7 +386,7 @@
                style="background:#fff;border-radius:14px;max-width:420px;width:100%;padding:22px 24px;box-shadow:0 20px 50px rgba(0,0,0,0.25);">
             <p id="geminiConsentTitle" style="font-size:15px;font-weight:800;color:#111;margin:0 0 10px;">🤖 대체 AI(Gemini) 사용 승인</p>
             <p style="font-size:12.5px;color:#374151;line-height:1.65;margin:0 0 10px;">
-              기본 AI(Cerebras)를 사용할 수 없습니다. 계속하려면 <strong>Google Gemini</strong>로 전환해야 합니다.
+              기본 AI(Cerebras·Groq)를 사용할 수 없습니다. 계속하려면 <strong>Google Gemini</strong>로 전환해야 합니다.
             </p>
             <p style="font-size:12px;color:#6b7280;line-height:1.6;margin:0 0 14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;">
               승인하면 분석 입력(검색어, 조회된 논문·특허 제목 등)이 <strong>Google 서버로 전송</strong>됩니다.
@@ -421,8 +424,9 @@
     const ADMIN_PASSCODE = 'ntis2026';
 
     const AI_PROVIDER_OPTIONS = [
-      { value: 'auto',     label: '자동 (권장)', desc: 'Cerebras 우선 → 실패 시 Gemini' },
-      { value: 'cerebras', label: 'Cerebras 강제', desc: 'Gemini 폴백 없음. 아래 모델 사용' },
+      { value: 'auto',     label: '자동 (권장)', desc: 'Cerebras → Groq → (승인 후) Gemini 순으로 시도' },
+      { value: 'cerebras', label: 'Cerebras 강제', desc: '폴백 없음. 아래 모델 사용' },
+      { value: 'groq',     label: 'Groq 강제', desc: '폴백 없음. 서버 GROQ_MODEL(기본 openai/gpt-oss-120b) 사용' },
       { value: 'gemini',   label: 'Gemini 강제', desc: 'gemini-3.1-flash-lite로 바로 호출' },
     ];
 
@@ -460,7 +464,7 @@
           <p style="font-size:12px;font-weight:700;color:#374151;margin:0 0 6px;">제공자</p>
           ${provRadios}
 
-          <div id="adminModelWrap" style="margin-top:12px;${provider==='gemini'?'opacity:0.4;pointer-events:none;':''}">
+          <div id="adminModelWrap" style="margin-top:12px;${provider==='gemini'||provider==='groq'?'opacity:0.4;pointer-events:none;':''}">
             <p style="font-size:12px;font-weight:700;color:#374151;margin:0 0 6px;">Cerebras 모델 <span style="font-weight:400;color:#9ca3af;">(자동·Cerebras 강제일 때)</span></p>
             <select id="adminModelSelect" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
               <option value="${AI_MODEL_MODES.GLM}" ${model===AI_MODEL_MODES.GLM?'selected':''}>zai-glm-4.7 (기본)</option>
@@ -470,7 +474,7 @@
           </div>
 
           <p style="font-size:11px;color:#9ca3af;margin:14px 0 0;line-height:1.5;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:9px 11px;">
-            현재 서버 상태 — Cerebras: <strong>${STATE.cerebrasConfigured===false?'없음':'있음'}</strong> · Gemini: <strong>${STATE.geminiConfigured?'있음':'없음'}</strong>.
+            현재 서버 상태 — Cerebras: <strong>${STATE.cerebrasConfigured===false?'없음':'있음'}</strong> · Groq: <strong>${STATE.groqConfigured?'있음':'없음'}</strong> · Gemini: <strong>${STATE.geminiConfigured?'있음':'없음'}</strong>.
             'Gemini 강제'는 검색어·논문 제목이 Google로 전송됨을 관리자가 승인한 것으로 간주합니다.
           </p>
 
@@ -484,7 +488,8 @@
       overlay.addEventListener('change', (e) => {
         if (e.target.name === 'adminProvider') {
           const wrap = overlay.querySelector('#adminModelWrap');
-          const gemini = e.target.value === 'gemini';
+          // Gemini·Groq 강제는 모델을 서버가 정하므로 Cerebras 모델 선택을 비활성화한다.
+          const gemini = e.target.value === 'gemini' || e.target.value === 'groq';
           wrap.style.opacity = gemini ? '0.4' : '';
           wrap.style.pointerEvents = gemini ? 'none' : '';
         }
@@ -504,7 +509,7 @@
     }
 
     function applyAdminAiSettings(providerMode, modelMode) {
-      STATE.aiProviderMode = ['auto', 'cerebras', 'gemini'].includes(providerMode) ? providerMode : 'auto';
+      STATE.aiProviderMode = ['auto', 'cerebras', 'groq', 'gemini'].includes(providerMode) ? providerMode : 'auto';
       localStorage.setItem('sc_ai_provider_mode', STATE.aiProviderMode);
       if (Object.values(AI_MODEL_MODES).includes(modelMode)) {
         STATE.aiModelMode = modelMode;
@@ -515,8 +520,9 @@
       // 'Gemini 강제'는 관리자의 명시적 선택이므로 데이터 전송 동의로 간주한다.
       if (STATE.aiProviderMode === 'gemini') localStorage.setItem('sc_gemini_consent', 'granted');
       const label = STATE.aiProviderMode === 'gemini' ? 'Gemini 강제'
+        : STATE.aiProviderMode === 'groq' ? 'Groq 강제'
         : STATE.aiProviderMode === 'cerebras' ? `Cerebras 강제 (${getCerebrasModelLabel(getActiveCerebrasModel())})`
-        : `자동 (Cerebras ${getCerebrasModelLabel(getActiveCerebrasModel())} → Gemini)`;
+        : `자동 (Cerebras ${getCerebrasModelLabel(getActiveCerebrasModel())} → Groq → Gemini)`;
       showToast(`AI 모델 설정 저장됨: ${label}`, 'success');
     }
 
@@ -547,37 +553,46 @@
         };
 
         // 서버가 어떤 키를 가졌는지 /health로 파악한 값 + Admin 제공자 설정으로 경로를 정한다.
-        // (구버전 프록시는 두 플래그가 없으므로 Cerebras를 기본으로 시도)
+        // (구버전 프록시는 제공자 플래그가 없으므로 Cerebras를 기본으로 시도)
         const hasCerebras = STATE.cerebrasConfigured !== false;
+        const hasGroq     = STATE.groqConfigured === true;
         const hasGemini   = STATE.geminiConfigured === true;
         const providerMode = STATE.aiProviderMode || 'auto';
 
         // Admin이 'Gemini 강제'로 선택한 경우 — 바로 Gemini 호출 (선택 자체가 데이터 전송 승인).
         if (providerMode === 'gemini' && hasGemini) return postTo('/gemini');
+        // 'Groq 강제' — 폴백 없이 Groq만 쓴다.
+        if (providerMode === 'groq' && hasGroq) return postTo('/groq');
+        // 'Cerebras 강제' — 폴백 없이 Cerebras만 쓴다.
+        if (providerMode === 'cerebras') return postTo('/cerebras');
 
-        // Gemini 폴백은 'auto' 모드에서만 허용한다('cerebras 강제'는 폴백 안 함).
-        const allowGeminiFallback = providerMode === 'auto' && hasGemini;
-
-        if (hasCerebras) {
+        // 자동: Cerebras → Groq 순으로 시도하고, 둘 다 실패하면 사용자 승인 후 Gemini로 전환한다.
+        // (Gemini는 Google로 데이터가 전송되므로 승인 없이 자동 전환하지 않는다)
+        const chain = [hasCerebras && '/cerebras', hasGroq && '/groq'].filter(Boolean);
+        let lastResp = null;
+        let lastError = null;
+        for (const endpoint of chain) {
           try {
-            const resp = await postTo('/cerebras');
-            if (resp.ok || !allowGeminiFallback) return resp;
-            // 승인받지 못하면 전환하지 않고 원래 실패 응답을 그대로 돌려준다.
-            if (!await ensureGeminiConsent()) return resp;
-            console.warn(`[AI] Cerebras 실패(HTTP ${resp.status}) → 승인됨, Gemini로 전환`);
+            const resp = await postTo(endpoint);
+            if (resp.ok) return resp;
+            lastResp = resp;
+            lastError = null;
+            console.warn(`[AI] ${endpoint} 실패(HTTP ${resp.status}) → 다음 제공자 시도`);
           } catch (error) {
-            if (!allowGeminiFallback) throw error;
-            if (!await ensureGeminiConsent()) throw error;
-            console.warn('[AI] Cerebras 호출 실패 → 승인됨, Gemini로 전환:', error.message);
+            lastError = error;
+            console.warn(`[AI] ${endpoint} 호출 실패 → 다음 제공자 시도:`, error.message);
           }
-          return postTo('/gemini');
         }
         if (hasGemini) {
-          // Cerebras 키가 아예 없는 경우 — Gemini가 유일한 경로. 'auto'면 승인을 받고,
-          // 'gemini 강제'는 위에서 이미 처리됐다.
-          if (providerMode !== 'gemini' && !await ensureGeminiConsent()) throw new Error('GEMINI_CONSENT_DECLINED');
-          return postTo('/gemini');
+          if (await ensureGeminiConsent()) {
+            console.warn('[AI] 승인됨 → Gemini로 전환');
+            return postTo('/gemini');
+          }
+          if (!chain.length) throw new Error('GEMINI_CONSENT_DECLINED');
         }
+        // 승인받지 못했거나 Gemini가 없으면 마지막 실패를 그대로 돌려준다.
+        if (lastResp) return lastResp;
+        if (lastError) throw lastError;
         return postTo('/cerebras');
       }
 
@@ -1753,7 +1768,7 @@ Respond ONLY with this JSON structure:
         } catch (err) {
           console.error('[Cerebras]', err);
           if (err.message === 'AI_SERVER_UNAVAILABLE') {
-            showToast('AI 서버 설정을 확인해주세요 (CEREBRAS_API_KEY 또는 GEMINI_API_KEY)', 'warning');
+            showToast('AI 서버 설정을 확인해주세요 (CEREBRAS_API_KEY · GROQ_API_KEY · GEMINI_API_KEY)', 'warning');
           } else if (err.message === 'GEMINI_CONSENT_DECLINED') {
             showToast('Gemini 사용을 승인하지 않아 AI 분석을 중단했습니다.', 'warning');
           } else {
@@ -4392,11 +4407,15 @@ Keep it under 80 Korean characters. No preamble.`;
           model: getActiveCerebrasModel(),
           messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
           temperature: 0.3,
-          max_tokens: 500,
+          // 추론형 모델(gpt-oss 등)은 추론에 토큰을 먼저 쓰므로, 짧은 요약이라도 추론을 낮추고 여유를 둔다
+          // (500이면 추론만 하다 본문이 비어 돌아오는 경우가 있었다). GLM에서는 reasoning_effort가 자동 제거된다.
+          reasoning_effort: 'low',
+          max_tokens: 1500,
         });
         if (!resp.ok) return "AI 요약 생성 실패 (과제명 기반 매칭)";
         const data = await resp.json();
-        return (data?.choices?.[0]?.message?.content || '').trim().substring(0, 150);
+        const synopsis = (data?.choices?.[0]?.message?.content || '').trim().substring(0, 150);
+        return synopsis || "AI 요약 비어 있음 (과제명 기반 매칭)";
       } catch (e) {
         return "AI 연동 오류 (과제명 기반 매칭)";
       }
@@ -4879,7 +4898,9 @@ Respond ONLY with:
     // 과제명 핵심어를 "많이" 공유하는 과제부터 단계적으로 쓴다:
     //   ① 핵심어 전부 일치 → ② 절반 이상 일치 → ③ 하나라도 일치 → ④ 전체(경고)
     // 각 단계는 표본이 충분할 때만 채택하고, 부족하면 다음(느슨한) 단계로 내려간다.
-    const BUDGET_MIN_POOL = 8;       // ①·② 단계 채택 최소 과제 수 (분포 통계가 의미 있는 크기)
+    // ①·② 단계 채택 최소 과제 수. budget-core의 IQR 적용 기준·신뢰도 C 경계(5건)와 맞춘다.
+    // (8로 두면 7건처럼 한 끗 모자랄 때 ③단계로 떨어져 풀이 수십 배로 넓어지는 절벽이 생긴다)
+    const BUDGET_MIN_POOL = 5;
     const BUDGET_MIN_RELEVANT = 3;   // ③ 단계 채택 최소 과제 수
     function applyBudgetRelevanceGate(items, projName) {
       const coreTokens = budgetCoreTokens(projName);
@@ -5331,7 +5352,7 @@ Respond ONLY with:
             <li><strong>연간 정규화</strong> — 당해연도 연구비 우선, 없으면 총·정부연구비를 실제 수행월수로 연간화. <strong>수행기간이 없는 총액</strong>은 그대로 두면 연간값이 과대되므로 <strong>표본의 중앙 수행연수로 나눠 연간화</strong>합니다.</li>
             <li><strong>동일 과제 병합</strong> — NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 과제번호를 따로 부여해 같은 과제가 과다 반영됩니다. <strong>과제명</strong>으로 묶어 1과제=1표본으로 병합하고(후속 연차가 다른 사업으로 편성돼도 통합), 대표 연간 연구비는 <strong>연도별 합산(같은 연도 공동수행기관 몫 합산)→그 합산액의 중앙값</strong>으로 산출합니다.</li>
             <li><strong>현재가치 보정</strong> — 수행 중간연도 기준 연 ${(BUDGET_ESC_RATE * 100).toFixed(0)}% 상승률로 올해 가치 환산 (최대 ${BUDGET_ESC_CAP}년)</li>
-            <li><strong>관련성 게이트(단계식)</strong> — 넓은 보강 검색이 끌어온 무관 과제가 제안값을 움직이지 않도록, 과제명 핵심어를 <strong>모두</strong> 공유하는 과제(8건 이상일 때) → 절반 이상 공유 → 하나라도 공유 순으로 분포 산출 풀을 고릅니다.${budgetRange.filterSummary?.relevanceLabel ? ` 이번 분석: <strong>${escHtml(budgetRange.filterSummary.relevanceLabel)}</strong>.` : ''}</li>
+            <li><strong>관련성 게이트(단계식)</strong> — 넓은 보강 검색이 끌어온 무관 과제가 제안값을 움직이지 않도록, 과제명 핵심어를 <strong>모두</strong> 공유하는 과제(5건 이상일 때) → 절반 이상 공유 → 하나라도 공유 순으로 분포 산출 풀을 고릅니다.${budgetRange.filterSummary?.relevanceLabel ? ` 이번 분석: <strong>${escHtml(budgetRange.filterSummary.relevanceLabel)}</strong>.` : ''}</li>
             <li><strong>정제(순서: 관련성 게이트 → 현재가치 보정 → 이상치 제거)</strong> — 무관 과제를 먼저 걸러낸 뒤, 이상치 판정도 최종 통계와 동일하게 <strong>현재가치 보정값 기준</strong>으로 합니다.
               <div style="margin-top:6px;padding-left:12px;border-left:2px solid #e5e7eb;color:#6b7280;">
                 <p style="margin:0 0 4px 0;"><strong>IQR(사분위 범위)란?</strong> 연구비를 크기순으로 정렬해 4등분했을 때, 하위 25% 지점(Q1)과 상위 25% 지점(Q3) 사이 폭(<strong>IQR = Q3 − Q1</strong>, 가운데 50% 과제가 퍼진 정도)을 말합니다. 평균은 초대형 과제 하나에 크게 휘둘리지만 IQR은 중앙 50%만 보므로 이상치에 둔감합니다. <strong>[Q1 − 1.5×IQR, Q3 + 1.5×IQR]</strong>를 벗어난 값을 이상치로 봅니다(고전적 이상치 기준).</p>

@@ -8,6 +8,7 @@
     { "source": "/myip", "destination": "/api/proxy" },
     { "source": "/cerebras", "destination": "/api/proxy" },
     { "source": "/gemini", "destination": "/api/proxy" },
+    { "source": "/groq", "destination": "/api/proxy" },
     { "source": "/ntis", "destination": "/api/proxy" },
     { "source": "/ntis/connection", "destination": "/api/proxy" },
     { "source": "/ntis/related", "destination": "/api/proxy" },

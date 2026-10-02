@@ -7,6 +7,8 @@ const NTIS_HOST = 'www.ntis.go.kr';
 const FIXED_IV = 'jvHJ1EFA0IXBrxxz';
 // Gemini 모델명은 환경변수 GEMINI_MODEL로 덮어쓸 수 있다(모델 개편 시 코드 수정 불필요).
 const GEMINI_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
+// Groq 모델명은 환경변수 GROQ_MODEL로 덮어쓸 수 있다.
+const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-120b';
 
 function aesEncryptOfficial(plaintext, keyStr) {
   const key = Buffer.from(keyStr, 'utf8');
@@ -137,8 +139,10 @@ module.exports = async (req, res) => {
     return jsonRes(res, 200, {
       status: 'ok',
       service: 'ScienceON + NTIS Vercel Proxy (Seoul Region)',
-      aiConfigured: Boolean(process.env.CEREBRAS_API_KEY || process.env.GEMINI_API_KEY),
+      aiConfigured: Boolean(process.env.CEREBRAS_API_KEY || process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY),
       cerebrasConfigured: Boolean(process.env.CEREBRAS_API_KEY),
+      groqConfigured: Boolean(process.env.GROQ_API_KEY),
+      groqModel: process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL,
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
       geminiModel: process.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL,
       scienceOnConfigured: Boolean(process.env.SC_CLIENT_ID && process.env.SC_API_KEY && process.env.SC_MAC_ADDR),
@@ -153,6 +157,27 @@ module.exports = async (req, res) => {
     if (!apiKey) return jsonRes(res, 503, { error: 'CEREBRAS_API_KEY is not configured on the server' });
     try {
       const result = await httpsPostJSON('api.cerebras.ai', '/v1/chat/completions', req.body || {}, {
+        Authorization: `Bearer ${apiKey}`,
+      });
+      setCORS(res);
+      setNoCache(res);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.status(result.status).send(result.body);
+    } catch (e) {
+      return jsonRes(res, 502, { error: e.message });
+    }
+  }
+
+  // ── /groq — Groq의 OpenAI 호환 엔드포인트. 요청·응답 형식이 /cerebras와 같다.
+  if (pathname === '/groq') {
+    if (req.method !== 'POST') return jsonRes(res, 405, { error: 'POST required' });
+    const apiKey = process.env.GROQ_API_KEY || '';
+    if (!apiKey) return jsonRes(res, 503, { error: 'GROQ_API_KEY is not configured on the server' });
+    try {
+      const payload = { ...(req.body || {}) };
+      payload.model = process.env.GROQ_MODEL || GROQ_DEFAULT_MODEL;
+      if (!/gpt-oss/.test(payload.model)) delete payload.reasoning_effort;
+      const result = await httpsPostJSON('api.groq.com', '/openai/v1/chat/completions', payload, {
         Authorization: `Bearer ${apiKey}`,
       });
       setCORS(res);
