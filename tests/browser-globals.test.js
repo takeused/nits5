@@ -325,6 +325,28 @@ test('budget relevance matches Latin tokens as whole words and honors AI/인공�
   assert.equal(context.budgetLexicalRelevance('search', { projNm: '<span class="search_word">검색</span> 엔진' }), 0);
 });
 
+test('budget relevance gate prefers projects sharing every core keyword, then loosens', () => {
+  const context = createBrowserContext();
+  loadScript(context, 'js/state.js');
+  loadScript(context, 'js/commerce-score.js');
+  loadScript(context, 'js/budget-core.js');
+  loadScript(context, 'js/ui.js');
+
+  const make = (titles) => titles.map((projNm, i) => ({ projNm, pjtId: String(i) }));
+  const both = Array.from({ length: 8 }, (_, i) => `AI 재난안전 관제 ${i}`);
+  const aiOnly = Array.from({ length: 30 }, (_, i) => `AI 의료영상 진단 ${i}`);
+
+  // 둘 다 공유하는 과제가 8건 이상이면 그 과제들만으로 분포를 만든다
+  const strict = context.applyBudgetRelevanceGate(make([...both, ...aiOnly]), 'AI 기반 재난안전 플랫폼 개발');
+  assert.equal(strict.tier, 'all');
+  assert.equal(strict.items.length, 8);
+
+  // 부족하면 핵심어 하나라도 공유하는 과제로 내려가고, 무관 과제는 여전히 뺀다
+  const loose = context.applyBudgetRelevanceGate(make([...both.slice(0, 2), ...aiOnly.slice(0, 5), '해양 생태 조사']), 'AI 기반 재난안전 플랫폼 개발');
+  assert.equal(loose.tier, 'any');
+  assert.equal(loose.items.length, 7);
+});
+
 test('commerce detail report reuses the ranked gap indicator instead of a conflicting formula', () => {
   const ui = fs.readFileSync(path.join(ROOT, 'js/ui.js'), 'utf8');
   assert.match(ui, /analysisMeta\?\.indicators\?\.components\?\.gapSignal/);

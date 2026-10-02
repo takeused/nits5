@@ -4874,24 +4874,42 @@ Respond ONLY with:
       return text.replace(/<[^>]*>/g, ' ').toLowerCase();
     }
 
-    // 폴백 광역 검색으로 유입된 무관 과제를 이상치 제거 전에 걸러낸다(B-5).
-    // 관련 과제가 3건 이상이면 관련 과제만 남긴다. 그보다 적으면 표본이 소멸하므로
-    // 전체를 유지하되, 무관 과제가 섞였다는 사실을 로그로 분명히 남긴다.
-    const BUDGET_MIN_RELEVANT = 3;
+    // 분포 통계(제안값)에 쓸 과제 풀을 이상치 제거 전에 고른다(B-5).
+    // 표본 보강 검색어("AI 기반"처럼 넓은 검색)는 핵심어 하나만 겹치는 무관 과제를 대량으로 끌어오므로,
+    // 과제명 핵심어를 "많이" 공유하는 과제부터 단계적으로 쓴다:
+    //   ① 핵심어 전부 일치 → ② 절반 이상 일치 → ③ 하나라도 일치 → ④ 전체(경고)
+    // 각 단계는 표본이 충분할 때만 채택하고, 부족하면 다음(느슨한) 단계로 내려간다.
+    const BUDGET_MIN_POOL = 8;       // ①·② 단계 채택 최소 과제 수 (분포 통계가 의미 있는 크기)
+    const BUDGET_MIN_RELEVANT = 3;   // ③ 단계 채택 최소 과제 수
     function applyBudgetRelevanceGate(items, projName) {
       const coreTokens = budgetCoreTokens(projName);
-      if (!coreTokens.length) return items;
-      const relevant = items.filter(it => {
+      if (!coreTokens.length || !items.length) return { items, tier: 'none', tierLabel: '' };
+
+      const scored = items.map(it => {
         const hay = budgetHaystack(it, 300);
-        return coreTokens.some(token => budgetTokenIn(hay, token));
+        return { it, hits: coreTokens.filter(token => budgetTokenIn(hay, token)).length };
       });
-      if (relevant.length === items.length) return items;
-      if (relevant.length >= BUDGET_MIN_RELEVANT) {
-        addBudgetLog('🧹', `관련성 게이트: 핵심어(${coreTokens.join(', ')}) 무관 ${items.length - relevant.length}건 제외 (${relevant.length}건 유지)`);
-        return relevant;
+      const n = coreTokens.length;
+      const majority = Math.ceil(n / 2);
+      const tiers = [
+        { tier: 'all',      label: `핵심어 ${n}개 모두 일치`,        min: n,        need: BUDGET_MIN_POOL },
+        { tier: 'majority', label: `핵심어 ${majority}/${n}개 이상 일치`, min: majority, need: BUDGET_MIN_POOL },
+        { tier: 'any',      label: '핵심어 1개 이상 일치',            min: 1,        need: BUDGET_MIN_RELEVANT },
+      // 핵심어 수가 적어 일치 기준이 같은 단계가 생기면, 최소 건수가 낮은 뒤 단계 하나만 남긴다
+      ].filter((t, i, arr) => i === arr.length - 1 || t.min > arr[i + 1].min);
+
+      for (const t of tiers) {
+        const pool = scored.filter(s => s.hits >= t.min).map(s => s.it);
+        if (pool.length >= t.need) {
+          if (pool.length < items.length) {
+            addBudgetLog('🧹', `관련성 게이트: ${t.label} 과제 ${pool.length}건으로 분포 산출 (핵심어: ${coreTokens.join(', ')} · 덜 관련된 ${items.length - pool.length}건 제외)`);
+          }
+          return { items: pool, tier: t.tier, tierLabel: t.label };
+        }
       }
-      addBudgetLog('⚠️', `관련성 게이트: 핵심어가 들어간 과제가 ${relevant.length}건뿐이라 필터를 적용하지 않음 — 무관 과제 ${items.length - relevant.length}건이 섞여 있을 수 있습니다`);
-      return items;
+      const anyCount = scored.filter(s => s.hits > 0).length;
+      addBudgetLog('⚠️', `관련성 게이트: 핵심어가 들어간 과제가 ${anyCount}건뿐이라 필터를 적용하지 않음 — 무관 과제 ${items.length - anyCount}건이 섞여 있을 수 있습니다`);
+      return { items, tier: 'unfiltered', tierLabel: '관련성 필터 미적용' };
     }
 
     // ── Step 4: AI 유사도 평가 ───────────────────────────────────
@@ -5134,6 +5152,12 @@ Respond ONLY with:
 
       // ── 신뢰도 경고 배너 ────────────────────────────────────────
       const warningBanners = [];
+      const relTier = budgetRange.filterSummary?.relevanceTier;
+      if (relTier === 'any' || relTier === 'unfiltered') {
+        warningBanners.push(relTier === 'any'
+          ? `⚠️ 과제명 핵심어를 여러 개 공유하는 과제가 부족해, 핵심어 하나만 겹치는 과제까지 포함해 산출했습니다. 분야가 다른 과제가 섞였을 수 있으니 유사과제 목록을 확인하세요.`
+          : `⚠️ 과제명 핵심어가 들어간 과제가 거의 없어 관련성 필터 없이 산출했습니다. 결과는 참고용으로만 보세요.`);
+      }
       if (budgetRange.n < 5) {
         warningBanners.push(`⚠️ 표본 ${budgetRange.n}건 — 통계적 대표성이 낮습니다. 검색어를 더 일반화하거나 연구개발단계 필터를 '전체 단계'로 완화해 재시도하세요.`);
       } else if (budgetRange.n < 12) {
@@ -5142,7 +5166,7 @@ Respond ONLY with:
       if (budgetRange.n < 12 && budgetRange.filterSummary) {
         const fs = budgetRange.filterSummary;
         const phaseLabel = fs.rndPhase && fs.rndPhase !== 'ALL' ? `${fs.rndPhase}연구` : '전체 단계';
-        warningBanners.push(`검색 ${fs.keywords}개 키워드 · 원수집 ${fs.raw}건 → 유효 연구비/IQR ${fs.cleaned}건 → 계산 ${fs.dist}건 (${phaseLabel}, 기간 필터 없음).`);
+        warningBanners.push(`검색 ${fs.keywords}개 키워드 · 원수집 ${fs.raw}건 → 과제 병합·관련성 ${fs.relevant ?? '-'}건${fs.relevanceLabel ? `(${fs.relevanceLabel})` : ''} → 유효 연구비/IQR ${fs.cleaned}건 → 계산 ${fs.dist}건 (${phaseLabel}, 기간 필터 없음).`);
       }
       // 연구비 분포 폭은 결과를 막는 경고가 아니라 대표값 해석을 돕는 보조 진단으로 표시한다.
       const cvRounded = Math.round(budgetRange.cv);
@@ -5307,6 +5331,7 @@ Respond ONLY with:
             <li><strong>연간 정규화</strong> — 당해연도 연구비 우선, 없으면 총·정부연구비를 실제 수행월수로 연간화. <strong>수행기간이 없는 총액</strong>은 그대로 두면 연간값이 과대되므로 <strong>표본의 중앙 수행연수로 나눠 연간화</strong>합니다.</li>
             <li><strong>동일 과제 병합</strong> — NTIS는 다년 과제의 연차별·공동수행기관별 레코드에 과제번호를 따로 부여해 같은 과제가 과다 반영됩니다. <strong>과제명</strong>으로 묶어 1과제=1표본으로 병합하고(후속 연차가 다른 사업으로 편성돼도 통합), 대표 연간 연구비는 <strong>연도별 합산(같은 연도 공동수행기관 몫 합산)→그 합산액의 중앙값</strong>으로 산출합니다.</li>
             <li><strong>현재가치 보정</strong> — 수행 중간연도 기준 연 ${(BUDGET_ESC_RATE * 100).toFixed(0)}% 상승률로 올해 가치 환산 (최대 ${BUDGET_ESC_CAP}년)</li>
+            <li><strong>관련성 게이트(단계식)</strong> — 넓은 보강 검색이 끌어온 무관 과제가 제안값을 움직이지 않도록, 과제명 핵심어를 <strong>모두</strong> 공유하는 과제(8건 이상일 때) → 절반 이상 공유 → 하나라도 공유 순으로 분포 산출 풀을 고릅니다.${budgetRange.filterSummary?.relevanceLabel ? ` 이번 분석: <strong>${escHtml(budgetRange.filterSummary.relevanceLabel)}</strong>.` : ''}</li>
             <li><strong>정제(순서: 관련성 게이트 → 현재가치 보정 → 이상치 제거)</strong> — 무관 과제를 먼저 걸러낸 뒤, 이상치 판정도 최종 통계와 동일하게 <strong>현재가치 보정값 기준</strong>으로 합니다.
               <div style="margin-top:6px;padding-left:12px;border-left:2px solid #e5e7eb;color:#6b7280;">
                 <p style="margin:0 0 4px 0;"><strong>IQR(사분위 범위)란?</strong> 연구비를 크기순으로 정렬해 4등분했을 때, 하위 25% 지점(Q1)과 상위 25% 지점(Q3) 사이 폭(<strong>IQR = Q3 − Q1</strong>, 가운데 50% 과제가 퍼진 정도)을 말합니다. 평균은 초대형 과제 하나에 크게 휘둘리지만 IQR은 중앙 50%만 보므로 이상치에 둔감합니다. <strong>[Q1 − 1.5×IQR, Q3 + 1.5×IQR]</strong>를 벗어난 값을 이상치로 봅니다(고전적 이상치 기준).</p>
@@ -5461,6 +5486,7 @@ ${'─'.repeat(64)}
     - 수행기간은 표본 필터가 아니라 연간 연구비 정규화에만 사용
 
   [Step 3] 관련성 게이트 → 현재가치 보정 → 로그 IQR 이상치 제거
+    - 관련성 게이트: 과제명 핵심어 전부 일치 → 절반 이상 → 1개 이상 순으로 분포 풀 선택${budgetRange.filterSummary?.relevanceLabel ? ` (이번: ${budgetRange.filterSummary.relevanceLabel})` : ''}
     - 당해연도 연구비 우선, 없으면 총·정부연구비 ÷ 실제 수행월수로 연간 환산
     - 기간미상 총액은 표본 중앙 수행연수로 연간화
     - 이상치 판정은 현재가치 보정값 기준, 로그 스케일 IQR로 우편향 분포 대응
@@ -5619,6 +5645,7 @@ ${'='.repeat(64)}
 
         // ── Step 2.5: 기간미상 총액을 표본 중앙 수행연수로 연간화 (A-1) ──
         // 병합보다 먼저 보정해야, 병합 그룹에 섞인 기간미상 항목도 올바른 연간값으로 합쳐진다.
+        const collectedCount = rawItems.length;   // 진단 표시용: 병합·관련성 게이트 전 원수집 건수
         const reann = BudgetCore.reannualizeUnknownPeriods(rawItems);
         rawItems = reann.items;
         if (reann.adjustedCount > 0) {
@@ -5630,7 +5657,9 @@ ${'='.repeat(64)}
 
         // ── Step 2.7: 관련성 게이트를 IQR 앞으로 (B-5) ──────────────
         // 무관 과제가 섞인 채로 IQR 경계가 잡히지 않도록, 이상치 제거 전에 먼저 걸러낸다.
-        rawItems = applyBudgetRelevanceGate(rawItems, projName);
+        // 핵심어를 많이 공유하는 과제부터 단계적으로 골라, 제안값이 관련 과제 분포에서 나오게 한다.
+        const gate = applyBudgetRelevanceGate(rawItems, projName);
+        rawItems = gate.items;
 
         // ── Step 3: IQR 이상치 제거 ─────────────────────────────
         setBudgetStep(3);
@@ -5693,14 +5722,17 @@ ${'='.repeat(64)}
         }
 
         budgetRange.filterSummary = {
-          raw: rawItems.length,
+          raw: collectedCount,
+          relevant: rawItems.length,
           cleaned: cleanedItems.length,
           dist: distItems.length,
           keywords: keywords.length,
           rndPhase,
+          relevanceTier: gate.tier,
+          relevanceLabel: gate.tierLabel,
         };
         if (budgetRange.n < 12) {
-          addBudgetLog('ℹ️', `표본 축소 진단: 원수집 ${rawItems.length}건 → 유효 연구비/IQR ${cleanedItems.length}건 → 계산 표본 ${budgetRange.n}건`);
+          addBudgetLog('ℹ️', `표본 축소 진단: 원수집 ${collectedCount}건 → 과제 병합·관련성 ${rawItems.length}건 → 유효 연구비/IQR ${cleanedItems.length}건 → 계산 표본 ${budgetRange.n}건`);
         }
         if (budgetRange.mergedRecords > budgetRange.n) {
           addBudgetLog('🔢', `신뢰도 유효표본: 계산 ${budgetRange.n}건이 원 레코드 ${budgetRange.mergedRecords}건에서 병합됨 → 유효표본 ${budgetRange.effectiveN}로 보정`);
