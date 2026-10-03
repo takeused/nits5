@@ -308,7 +308,7 @@ async function generateInvestmentCompareAISummary(seq, sides, cmp) {
     연구단계: share(side.agg.byPhase),
     지역: share(side.agg.byRegion),
     민간부담비율: side.agg.privateRatio === null ? '미상' : `${Math.round(side.agg.privateRatio * 100)}%`,
-    주요사업: side.agg.businesses.slice(0, 4).map(x => `${x.name}(${x.ministry})`),
+    주요사업: (side.agg.focusBusinesses || side.agg.businesses).slice(0, 4).map(x => `${x.name}(${x.ministry})`),
   });
   const facts = { 분야: sides.map(brief), 규칙기반차이: cmp.signals.map(s => s.text) };
   const quoted = sides.map(s => `"${s.query}"`).join(' vs ');

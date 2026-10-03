@@ -121,7 +121,7 @@ async function collectInvestmentData(proxyBase, query, { isStale = () => false, 
     }
   }
 
-  const agg = InvestmentCore.aggregateInvestment(records);
+  const agg = InvestmentCore.aggregateInvestment(records, { query });
   const trend = InvestmentCore.summarizeYearCounts(years, counts);
   const insights = InvestmentCore.buildInvestmentInsights(agg, trend);
   const meta = { query, years, recentFrom, lastYear, recentTotal, failedPages, sampleSize: records.length };
@@ -221,6 +221,70 @@ function investKpi(label, value, sub) {
     </div>`;
 }
 
+// ── 주요 기존 사업 표 (필터: 키워드 특화 / 범용 제외 / 전체) ─────────────────
+// 표본 과제는 관련도 상위라 제목에는 모두 키워드가 들어 있지만, 그 과제를 담은 사업은
+// 개인기초연구·출연연 운영비처럼 주제와 무관한 범용 사업일 수 있다. 유사·중복 검토에는
+// 사업명에 키워드가 들어간 "키워드 특화" 사업이 기본이다.
+let _investBizState = null;
+
+function setInvestBizFilter(mode) {
+  if (!_investBizState) return;
+  _investBizState.mode = mode;
+  renderInvestBusinessTable();
+}
+
+function renderInvestBusinessTable() {
+  const box = document.getElementById('investBizTable');
+  const bar = document.getElementById('investBizFilter');
+  const note = document.getElementById('investBizNote');
+  if (!box || !_investBizState) return;
+  const { agg, mode } = _investBizState;
+  const lists = {
+    specific: agg.businesses.filter(b => b.keywordInName),
+    nonGeneric: agg.businesses.filter(b => !b.generic),
+    all: agg.businesses,
+  };
+  const labels = { specific: '키워드 특화', nonGeneric: '범용 사업 제외', all: '전체' };
+  if (bar) {
+    bar.innerHTML = Object.keys(labels).map((key, i) => {
+      const active = key === mode;
+      const empty = !lists[key].length;
+      return `<button type="button" ${empty ? 'disabled' : ''} onclick="setInvestBizFilter('${key}')" style="padding:4px 10px;font-size:11px;font-weight:700;border:0;${i ? 'border-left:1px solid #d0d5dd;' : ''}cursor:${empty ? 'not-allowed' : 'pointer'};${active ? 'background:#344054;color:#fff;' : `background:#fff;color:${empty ? '#cbd5e1' : '#475467'};`}">${labels[key]} ${lists[key].length}</button>`;
+    }).join('');
+  }
+  if (note) {
+    const base = '표본 과제 기준 정부연구비 순. 과제 수는 과제명 기준 고유 과제. 비중은 표본 전체 정부연구비 대비.';
+    const noSpecific = agg.businessCounts && !agg.businessCounts.specific;
+    note.textContent = mode === 'specific'
+      ? `사업명에 검색어가 들어간 주제 특화 사업만 표시합니다. ${base}`
+      : mode === 'nonGeneric'
+        ? `개인·집단 기초연구, 출연연 운영비, 창업·국제협력 지원처럼 주제와 무관한 범용 사업을 뺐습니다(사업명 기준 자동 분류라 완전하지 않음). ${noSpecific ? '사업명에 검색어가 들어간 사업이 없어 이 보기가 기본입니다. ' : ''}${base}`
+        : `범용 사업을 포함한 전체 목록입니다. ${base}`;
+  }
+  const rows = lists[mode] || lists.all;
+  if (!rows.length) {
+    box.innerHTML = '<div style="font-size:12px;color:#98a2b3;">해당하는 사업이 없습니다.</div>';
+    return;
+  }
+  const badge = (text, color, bg, border, title) => ` <span title="${title}" style="font-size:10px;font-weight:500;color:${color};background:${bg};border:1px solid ${border};border-radius:3px;padding:0 4px;white-space:nowrap;">${text}</span>`;
+  const body = rows.slice(0, 10).map((b, i) => `
+    <tr style="border-top:1px solid #f2f4f7;">
+      <td style="padding:7px 8px;color:#98a2b3;font-size:11px;">${i + 1}</td>
+      <td style="padding:7px 8px;font-size:12px;color:${b.generic ? '#667085' : '#1d2939'};font-weight:600;max-width:320px;">${escHtml(b.name)}${b.keywordInName ? badge('키워드 특화', '#1d4ed8', '#eff6ff', '#bfdbfe', '사업명에 검색어가 들어간 주제 특화 사업') : ''}${b.generic ? badge('범용', '#667085', '#f2f4f7', '#d0d5dd', '주제와 무관하게 여러 분야 과제를 담는 범용 사업(사업명 기준 자동 분류)') : ''}${b.variants > 1 ? badge(`표기 ${b.variants}종 통합`, '#7c3aed', '#f5f3ff', '#ddd6fe', `띄어쓰기·(R&amp;D) 등 표기가 다른 같은 사업 ${b.variants}가지를 하나로 합침`) : ''}</td>
+      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;">${escHtml(b.ministry || '-')}</td>
+      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;text-align:right;">${b.projects}건</td>
+      <td style="padding:7px 8px;font-size:11.5px;color:#1d2939;white-space:nowrap;text-align:right;font-weight:700;">${fmtBudget(b.gov)}</td>
+      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;text-align:right;">${Math.round(b.share * 100)}%</td>
+      <td style="padding:7px 8px;font-size:11px;color:#98a2b3;white-space:nowrap;">${b.yearFrom ? (b.yearFrom === b.yearTo ? b.yearFrom : `${b.yearFrom}~${b.yearTo}`) : '-'}</td>
+    </tr>`).join('');
+  box.innerHTML = `<table style="width:100%;border-collapse:collapse;min-width:620px;">
+    <thead><tr style="font-size:10.5px;color:#98a2b3;text-align:left;">
+      <th style="padding:4px 8px;">#</th><th style="padding:4px 8px;">사업명</th><th style="padding:4px 8px;">부처</th>
+      <th style="padding:4px 8px;text-align:right;">과제</th><th style="padding:4px 8px;text-align:right;">정부연구비(표본)</th>
+      <th style="padding:4px 8px;text-align:right;">비중</th><th style="padding:4px 8px;">연도</th>
+    </tr></thead><tbody>${body}</tbody></table>${rows.length > 10 ? `<div style="font-size:10.5px;color:#98a2b3;margin-top:6px;">상위 10개 표시 (전체 ${rows.length}개)</div>` : ''}`;
+}
+
 function renderInvestmentDashboard(meta, agg, trend, insights) {
   const { query, years, recentFrom, lastYear, recentTotal, sampleSize, failedPages } = meta;
   const coverage = recentTotal > 0 ? Math.min(1, sampleSize / recentTotal) : 0;
@@ -228,17 +292,6 @@ function renderInvestmentDashboard(meta, agg, trend, insights) {
   const topMinistry = agg.byMinistry.find(r => !r.isOther && r.name !== '미상');
   const growthText = trend.growth === null ? '—' : `${trend.growth >= 0 ? '+' : ''}${Math.round(trend.growth * 100)}%`;
   const sampleNote = `표본: ${recentFrom}~${lastYear}년 과제 중 관련도 상위 ${sampleSize.toLocaleString()}건 (전체 ${recentTotal.toLocaleString()}건의 ${Math.round(coverage * 100)}%) · 정부연구비 비중 기준`;
-
-  const businessRows = agg.businesses.slice(0, 10).map((b, i) => `
-    <tr style="border-top:1px solid #f2f4f7;">
-      <td style="padding:7px 8px;color:#98a2b3;font-size:11px;">${i + 1}</td>
-      <td style="padding:7px 8px;font-size:12px;color:#1d2939;font-weight:600;max-width:320px;">${escHtml(b.name)}${b.variants > 1 ? ` <span title="띄어쓰기·(R&amp;D) 등 표기가 다른 같은 사업 ${b.variants}가지를 하나로 합침" style="font-size:10px;font-weight:500;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:3px;padding:0 4px;white-space:nowrap;">표기 ${b.variants}종 통합</span>` : ''}</td>
-      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;">${escHtml(b.ministry || '-')}</td>
-      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;text-align:right;">${b.projects}건</td>
-      <td style="padding:7px 8px;font-size:11.5px;color:#1d2939;white-space:nowrap;text-align:right;font-weight:700;">${fmtBudget(b.gov)}</td>
-      <td style="padding:7px 8px;font-size:11.5px;color:#475467;white-space:nowrap;text-align:right;">${Math.round(b.share * 100)}%</td>
-      <td style="padding:7px 8px;font-size:11px;color:#98a2b3;white-space:nowrap;">${b.yearFrom ? (b.yearFrom === b.yearTo ? b.yearFrom : `${b.yearFrom}~${b.yearTo}`) : '-'}</td>
-    </tr>`).join('');
 
   const section = document.getElementById('analysisSection');
   section.innerHTML = `
@@ -277,15 +330,12 @@ function renderInvestmentDashboard(meta, agg, trend, insights) {
         </div>
 
         <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;margin-bottom:14px;overflow-x:auto;">
-          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:4px;">주요 기존 사업 (내역사업) — 신규사업 유사·중복 검토용</div>
-          <div style="font-size:10.5px;color:#98a2b3;margin-bottom:8px;">표본 과제 기준 정부연구비 순. 과제 수는 과제명 기준 고유 과제.</div>
-          ${businessRows ? `<table style="width:100%;border-collapse:collapse;min-width:620px;">
-            <thead><tr style="font-size:10.5px;color:#98a2b3;text-align:left;">
-              <th style="padding:4px 8px;">#</th><th style="padding:4px 8px;">사업명</th><th style="padding:4px 8px;">부처</th>
-              <th style="padding:4px 8px;text-align:right;">과제</th><th style="padding:4px 8px;text-align:right;">정부연구비(표본)</th>
-              <th style="padding:4px 8px;text-align:right;">비중</th><th style="padding:4px 8px;">연도</th>
-            </tr></thead><tbody>${businessRows}</tbody></table>`
-          : '<div style="font-size:12px;color:#98a2b3;">사업명 정보가 없습니다.</div>'}
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
+            <div style="font-size:12px;font-weight:700;color:#344054;">주요 기존 사업 (내역사업) — 신규사업 유사·중복 검토용</div>
+            <div id="investBizFilter" role="group" aria-label="사업 필터" style="display:inline-flex;border:1px solid #d0d5dd;border-radius:8px;overflow:hidden;"></div>
+          </div>
+          <div id="investBizNote" style="font-size:10.5px;color:#98a2b3;margin-bottom:8px;"></div>
+          <div id="investBizTable"></div>
         </div>
 
         <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:12px 16px;border-radius:0 8px 8px 0;margin-bottom:14px;">
@@ -310,7 +360,7 @@ function renderInvestmentDashboard(meta, agg, trend, insights) {
               <li><strong>연도별 과제 건수</strong> — NTIS 과제검색에 연도 필터(PY)를 걸어 연도마다 <strong>전체 건수</strong>를 조회합니다(표본 아님). NTIS는 과제를 <strong>연차·수행기관 단위 레코드</strong>로 집계하므로, 다년·공동 과제는 여러 건으로 셉니다.</li>
               <li><strong>투자 구조 표본</strong> — 최근 ${INVEST_RECENT_SPAN}년(${recentFrom}~${lastYear}) 과제 중 검색 관련도 상위 최대 ${INVEST_SAMPLE_PAGES * NTIS_PAGE_SIZE}건을 가져옵니다(NTIS가 페이지당 10건만 제공). 부처·전문기관·수행주체·단계·지역은 이 표본의 <strong>정부연구비 비중</strong>입니다.</li>
               <li><strong>합산 방식</strong> — 레코드마다 정부연구비는 "그 기관의 그 연도 금액"이라 단순 합산해도 이중 계산이 없습니다. 정부연구비가 비어 있는 경우 건수 비중으로 대체합니다.</li>
-              <li><strong>주요 기존 사업</strong> — 내역사업명(BusinessName) 기준으로 묶은 표본 정부연구비 순위입니다. 신규사업 기획 시 유사·중복 검토의 출발점으로 쓰세요.</li>
+              <li><strong>주요 기존 사업</strong> — 내역사업명(BusinessName) 기준으로 묶은 표본 정부연구비 순위입니다. 기본 보기는 사업명에 검색어가 들어간 <strong>키워드 특화 사업</strong>이며(없으면 범용 사업 제외), 개인·집단 기초연구·출연연 운영비 같은 <strong>범용 사업</strong>은 사업명 패턴으로 자동 분류해 필터로 숨기거나 볼 수 있습니다. 신규사업 기획 시 유사·중복 검토의 출발점으로 쓰세요.</li>
               <li><strong>데이터 기반 신호</strong> — 부처 1위 60% 이상(집중), 기업 수행 20% 미만(사업화 공백), 기초 50% 이상·개발 60% 이상(단계 편중), 민간부담 10% 미만, 수도권 60% 이상, 단일 사업 30% 이상 등 <strong>고정 기준</strong>으로 판정합니다. 정책 판단은 원자료와 함께 검토하세요.</li>
             </ol>
             <p style="margin:12px 0 0 0;font-size:11px;color:#94a3b8;">※ 표본은 검색 관련도 순이라 대형·핵심 과제 위주로 잡히며, 전수 통계와 차이가 있을 수 있습니다. 검색어가 넓을수록 무관 과제가 섞일 수 있습니다.</p>
@@ -318,6 +368,9 @@ function renderInvestmentDashboard(meta, agg, trend, insights) {
         </details>
       </div>
     </div>`;
+
+  _investBizState = { agg, mode: agg.businessFocus || 'all' };
+  renderInvestBusinessTable();
 
   requestAnimationFrame(() => {
     const ctx = document.getElementById('investYearChart');
@@ -363,7 +416,8 @@ async function generateInvestmentAISummary(runSeq, meta, agg, trend, insights) {
     연구단계: share(agg.byPhase),
     지역: share(agg.byRegion),
     민간부담비율: agg.privateRatio === null ? '미상' : `${Math.round(agg.privateRatio * 100)}%`,
-    주요사업: agg.businesses.slice(0, 6).map(b => `${b.name}(${b.ministry}, ${Math.round(b.share * 100)}%, ${b.yearFrom || ''}~${b.yearTo || ''})`),
+    주요사업: (agg.focusBusinesses || agg.businesses).slice(0, 6).map(b => `${b.name}(${b.ministry}, ${Math.round(b.share * 100)}%, ${b.yearFrom || ''}~${b.yearTo || ''})`),
+    주요사업기준: agg.businessFocus === 'specific' ? '사업명에 기술 키워드가 들어간 주제 특화 사업' : '범용 사업(기초연구·기관운영비 등) 제외',
     규칙기반신호: insights.map(i => i.text),
   };
   try {

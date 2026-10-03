@@ -7,6 +7,8 @@ const {
   summarizeYearCounts,
   buildInvestmentInsights,
   compareInvestment,
+  isGenericBusiness,
+  keywordMatcher,
   indexSeries,
   alignShares,
 } = require('../js/investment-core.js');
@@ -157,4 +159,43 @@ test('세 키워드 비교는 지표를 3개씩 담고 최고·최저 분야로 
 
 test('키워드가 2개 미만이면 비교하지 않는다', () => {
   assert.throws(() => compareInvestment([sideA()]));
+});
+
+test('범용 사업(기초연구·운영비·창업·국제협력)은 사업명 패턴으로 가려낸다', () => {
+  for (const name of ['개인기초연구(과기정통부)(R&D)', '집단연구지원', '한국전기연구원연구운영비지원(운영경비)', '국립환경과학원연구사업', '창업성장기술개발', '산업기술국제협력']) {
+    assert.equal(isGenericBusiness(name), true, name);
+  }
+  for (const name of ['해양공간 디지털트윈 적용 및 활용 기술개발', '스마트제조혁신기술개발', '재난안전취약계층지원']) {
+    assert.equal(isGenericBusiness(name), false, name);
+  }
+});
+
+test('사업명 키워드 일치는 띄어쓰기를 무시하고, 여러 단어면 모두 들어 있어야 한다', () => {
+  const m = keywordMatcher('디지털트윈');
+  assert.equal(m('디지털 트윈 기반 스마트시티 LAB'), true);
+  assert.equal(m('스마트시티 기상기후 융합기술'), false);
+  assert.equal(keywordMatcher('재난 안전')('재난안전기술개발'), true);
+  assert.equal(keywordMatcher('재난 안전')('재난대응기술'), false);
+  assert.equal(keywordMatcher('')('아무 사업'), false);
+});
+
+test('주요사업 기본 목록은 키워드 특화 사업, 없으면 범용 사업을 뺀 목록이다', () => {
+  const recs = [
+    rec({ title: 'A', gov: 900, business: '개인기초연구(과기정통부)' }),
+    rec({ title: 'B', gov: 300, business: '디지털 트윈 기반 스마트시티' }),
+    rec({ title: 'C', gov: 200, business: '스마트제조혁신기술개발' }),
+  ];
+  const agg = aggregateInvestment(recs, { query: '디지털트윈' });
+  assert.equal(agg.businessFocus, 'specific');
+  assert.deepEqual(agg.focusBusinesses.map(b => b.name), ['디지털 트윈 기반 스마트시티']);
+  assert.deepEqual(agg.businessCounts, { all: 3, specific: 1, nonGeneric: 2 });
+  assert.equal(agg.businesses[0].generic, true);                    // 전체 목록에는 그대로 남는다
+
+  const none = aggregateInvestment(recs, { query: '양자' });
+  assert.equal(none.businessFocus, 'nonGeneric');
+  assert.deepEqual(none.focusBusinesses.map(b => b.name), ['디지털 트윈 기반 스마트시티', '스마트제조혁신기술개발']);
+
+  // 사업 쏠림 신호는 범용 사업이 아니라 기본 목록 1위로 판단한다
+  const texts = buildInvestmentInsights(agg, null).map(i => i.text).join(' | ');
+  assert.doesNotMatch(texts, /개인기초연구/);
 });

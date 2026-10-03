@@ -95,10 +95,31 @@
     return head;
   }
 
+  // 주제와 무관하게 여러 분야 과제를 담는 범용 사업(개인·집단 기초연구, 출연연 운영비, 창업·국제협력 지원 등).
+  // 이런 사업은 과제 단위로는 키워드와 관련 있어도, 신규사업의 유사·중복 검토 대상(주제 특화 사업)은 아니다.
+  // 사업명 패턴 기반이라 완전하지 않으며, 화면에 "범용"으로 표시만 하고 전체 보기에서는 그대로 보인다.
+  const GENERIC_BUSINESS_PATTERNS = [
+    /기초연구/, /집단연구/, /중견연구/, /신진연구/, /리더연구/, /학문후속/, /기초연구실/,
+    /연구운영비|운영경비|연구개발지원|기관고유|기본사업|출연금|인건비/,
+    /원연구사업$|연구원연구사업/, /국제협력/, /창업성장/, /산학연/, /우수기업연구소/, /중소기업기술혁신/,
+  ];
+  const isGenericBusiness = name => GENERIC_BUSINESS_PATTERNS.some(re => re.test(String(name || '').replace(/\s+/g, '')));
+
+  // 검색어가 사업명에 들어 있는지(띄어쓰기·기호 무시). 여러 단어면 모든 단어가 들어 있어야 한다.
+  function keywordMatcher(query) {
+    const whole = normTitle(query);
+    const tokens = String(query || '').split(/\s+/).map(normTitle).filter(Boolean);
+    if (!whole) return () => false;
+    return text => {
+      const n = normTitle(text);
+      return n.includes(whole) || (tokens.length > 1 && tokens.every(t => n.includes(t)));
+    };
+  }
+
   // 허핀달-허쉬만 지수(0~10000). 2500 이상이면 고집중으로 본다.
   const hhi = rows => Math.round(rows.filter(r => !r.isOther).reduce((s, r) => s + (r.share * 100) ** 2, 0));
 
-  function aggregateInvestment(records = []) {
+  function aggregateInvestment(records = [], { query = '' } = {}) {
     const list = (Array.isArray(records) ? records : []).filter(Boolean);
     const gov = list.reduce((s, r) => s + positive(r.gov), 0);
     const priv = list.reduce((s, r) => s + positive(r.priv), 0);
@@ -133,6 +154,18 @@
       share: gov > 0 ? b.gov / gov : 0,
     })).sort((a, b) => b.gov - a.gov || b.count - a.count);
 
+    // 사업 분류: 키워드 특화(사업명에 검색어) / 범용 / 그 외. 기본 목록(focusBusinesses)은 특화 사업,
+    // 특화 사업이 하나도 없으면(사업명이 검색어와 다른 표현을 쓰는 분야) 범용 사업을 뺀 목록으로 대체한다.
+    const nameHasKeyword = keywordMatcher(query);
+    for (const b of businesses) {
+      b.keywordInName = nameHasKeyword(b.name);
+      b.generic = !b.keywordInName && isGenericBusiness(b.name);
+    }
+    const specific = businesses.filter(b => b.keywordInName);
+    const nonGeneric = businesses.filter(b => !b.generic);
+    const businessFocus = specific.length ? 'specific' : (query ? 'nonGeneric' : 'all');
+    const focusBusinesses = businessFocus === 'specific' ? specific : businessFocus === 'nonGeneric' ? nonGeneric : businesses;
+
     const byMinistry = groupBy(list, r => normMinistry(r.ministry), { top: 6 });
     const byPerformer = groupBy(list, r => performerGroup(r.performer), { top: 7 });
     const byPhase = groupBy(list, r => phaseGroup(r.phase), { top: 6 });
@@ -151,6 +184,9 @@
       yearTo: years.length ? Math.max(...years) : null,
       byMinistry, byOrderAgency, byPerformer, byPhase, byRegion,
       businesses,
+      focusBusinesses,
+      businessFocus,
+      businessCounts: { all: businesses.length, specific: specific.length, nonGeneric: nonGeneric.length },
       ministryHHI: hhi(byMinistry),
       companyShare: shareOf(byPerformer, isCompanyGroup),
       universityShare: shareOf(byPerformer, name => name === '대학'),
@@ -220,7 +256,7 @@
     if (agg.capitalShare >= 0.6) {
       out.push({ tone: 'warn', text: `수도권 집중: 정부연구비의 ${pct(agg.capitalShare)}가 서울·경기·인천. 지역 거점형 사업 기획 시 근거가 됩니다.` });
     }
-    const topBiz = agg.businesses[0];
+    const topBiz = (agg.focusBusinesses || agg.businesses)[0];
     if (topBiz && topBiz.share >= 0.3) {
       out.push({ tone: 'warn', text: `사업 쏠림: "${topBiz.name}" 한 사업이 표본 정부연구비의 ${pct(topBiz.share)}. 신규사업은 이 사업과의 차별화(대상·단계·성과물)가 필수입니다.` });
     }
@@ -372,6 +408,8 @@
 
   return {
     compareInvestment,
+    isGenericBusiness,
+    keywordMatcher,
     josa,
     indexSeries,
     alignShares,
