@@ -228,9 +228,9 @@
   }
 
 
-  // ── 두 키워드 상대 비교 ───────────────────────────────────────
-  // a, b = { query, agg, trend, meta }. 규모가 크게 다른 분야도 비교되도록 절대값 대신
-  // 지수(첫 유효 연도=100)와 비중으로 맞춘다.
+  // ── 키워드 2~3개 상대 비교 ────────────────────────────────────
+  // sides = [{ query, agg, trend, meta }, ...]. 규모가 크게 다른 분야도 비교되도록 절대값 대신
+  // 지수(첫 유효 연도=100)와 비중으로 맞춘다. 지표는 모두 sides와 같은 순서의 배열이다.
   const COMPARE_DIMENSIONS = [
     ['byMinistry', '부처별 정부연구비'], ['byOrderAgency', '전문기관별'], ['byPerformer', '수행주체별'],
     ['byPhase', '연구개발단계별'], ['byRegion', '지역별 (시도)'],
@@ -246,52 +246,59 @@
     };
   }
 
-  // 두 분포를 같은 항목 기준으로 맞춘다. 기타·미상은 제외하고, 양쪽 비중이 큰 순으로 top개.
-  function alignShares(rowsA = [], rowsB = [], top = 8) {
-    const clean = rows => rows.filter(r => !r.isOther && r.name !== '미상');
+  // 여러 분포를 같은 항목 기준으로 맞춘다. 기타·미상은 제외하고, 비중이 가장 큰 쪽 기준 상위 top개.
+  // 반환 행: { name, values: [side별 비중], spread: 최대-최소 }
+  function alignShares(rowSets = [], top = 8) {
+    const clean = rows => (rows || []).filter(r => !r.isOther && r.name !== '미상');
     const map = new Map();
-    for (const r of clean(rowsA)) map.set(r.name, { name: r.name, a: r.share, b: 0 });
-    for (const r of clean(rowsB)) {
-      if (map.has(r.name)) map.get(r.name).b = r.share;
-      else map.set(r.name, { name: r.name, a: 0, b: r.share });
-    }
+    rowSets.forEach((rows, i) => {
+      for (const r of clean(rows)) {
+        if (!map.has(r.name)) map.set(r.name, { name: r.name, values: rowSets.map(() => 0) });
+        map.get(r.name).values[i] = r.share;
+      }
+    });
     return [...map.values()]
-      .sort((x, y) => Math.max(y.a, y.b) - Math.max(x.a, x.b))
-      .slice(0, top)
-      .map(r => ({ ...r, diff: r.a - r.b }));
+      .map(r => ({ ...r, spread: Math.max(...r.values) - Math.min(...r.values) }))
+      .sort((x, y) => Math.max(...y.values) - Math.max(...x.values))
+      .slice(0, top);
   }
 
-  function compareInvestment(a, b) {
-    const totalA = a.meta.recentTotal, totalB = b.meta.recentTotal;
-    const hi = Math.max(totalA, totalB), lo = Math.min(totalA, totalB);
+  function compareInvestment(sides) {
+    const list = Array.isArray(sides) ? sides : [];
+    if (list.length < 2) throw new Error('비교에는 키워드가 2개 이상 필요합니다');
+    const totals = list.map(s => s.meta.recentTotal);
+    const maxIdx = totals.indexOf(Math.max(...totals));
+    const minIdx = totals.indexOf(Math.min(...totals));
     const scale = {
-      ratio: lo > 0 ? hi / lo : null,
-      larger: totalA === totalB ? null : (totalA > totalB ? 'a' : 'b'),
+      ratio: totals[minIdx] > 0 ? totals[maxIdx] / totals[minIdx] : null,
+      largest: maxIdx === minIdx ? null : maxIdx,
+      smallest: maxIdx === minIdx ? null : minIdx,
     };
-    const topName = side => (side.agg.byMinistry.find(r => !r.isOther && r.name !== '미상') || {}).name || null;
-    const topShare = side => (side.agg.byMinistry.find(r => !r.isOther && r.name !== '미상') || {}).share ?? null;
+    const topMin = side => side.agg.byMinistry.find(r => !r.isOther && r.name !== '미상') || {};
+    const pick = fn => list.map(fn);
     const kpis = {
-      recentTotal: { a: totalA, b: totalB },
-      growth: { a: a.trend.growth, b: b.trend.growth },
-      phase: { a: a.trend.phase, b: b.trend.phase },
-      topMinistry: { a: topName(a), b: topName(b) },
-      topMinistryShare: { a: topShare(a), b: topShare(b) },
-      ministryHHI: { a: a.agg.ministryHHI, b: b.agg.ministryHHI },
-      companyShare: { a: a.agg.companyShare, b: b.agg.companyShare },
-      universityShare: { a: a.agg.universityShare, b: b.agg.universityShare },
-      privateRatio: { a: a.agg.privateRatio, b: b.agg.privateRatio },
-      capitalShare: { a: a.agg.capitalShare, b: b.agg.capitalShare },
+      recentTotal: totals,
+      growth: pick(s => s.trend.growth),
+      phase: pick(s => s.trend.phase),
+      topMinistry: pick(s => topMin(s).name || null),
+      topMinistryShare: pick(s => topMin(s).share ?? null),
+      ministryHHI: pick(s => s.agg.ministryHHI),
+      companyShare: pick(s => s.agg.companyShare),
+      universityShare: pick(s => s.agg.universityShare),
+      privateRatio: pick(s => s.agg.privateRatio),
+      capitalShare: pick(s => s.agg.capitalShare),
     };
-    const dims = COMPARE_DIMENSIONS.map(([key, title]) => ({ key, title, rows: alignShares(a.agg[key], b.agg[key]) }));
+    const top = list.length >= 3 ? 6 : 8;
+    const dims = COMPARE_DIMENSIONS.map(([key, title]) => ({ key, title, rows: alignShares(list.map(s => s.agg[key]), top) }));
     return {
       scale, kpis, dims,
-      years: a.trend.years,
-      index: { a: indexSeries(a.trend.counts), b: indexSeries(b.trend.counts) },
-      signals: buildCompareSignals(a, b, kpis, dims),
+      queries: list.map(s => s.query),
+      years: list[0].trend.years,
+      index: list.map(s => indexSeries(s.trend.counts)),
+      signals: buildCompareSignals(list, kpis, dims),
     };
   }
 
-  // 두 분야의 차이를 짚는 규칙 기반 신호(판단 보조용). 격차 임계값은 고정 기준.
   // 받침 유무로 조사를 고른다 ("인공지능"+가 → "인공지능이", "재난안전"+는 → "재난안전은").
   function josa(word, withBatchim, without) {
     const ch = String(word).trim().slice(-1);
@@ -301,53 +308,56 @@
   }
   const q = word => `"${word}"`;
 
-  function buildCompareSignals(a, b, kpis, dims) {
+  // 분야 간 차이를 짚는 규칙 기반 신호(판단 보조용). 2개면 "A가 B보다", 3개면 "가장 높은/낮은 분야"로 요약하고
+  // 괄호에 분야 순서대로 값을 나열한다. 격차 임계값은 고정 기준.
+  function buildCompareSignals(list, kpis, dims) {
     const out = [];
-    const A = a.query, B = b.query;
+    const names = list.map(s => s.query);
     const ga = w => `${q(w)}${josa(w, '이', '가')}`;       // 주격
     const un = w => `${q(w)}${josa(w, '은', '는')}`;       // 보조사
-    const gap = (x, y) => (x === null || x === undefined || y === null || y === undefined ? null : x - y);
+    const valid = arr => arr.every(v => v !== null && v !== undefined);
+    const extremes = arr => {
+      const hi = arr.indexOf(Math.max(...arr));
+      const lo = arr.indexOf(Math.min(...arr));
+      return { hi, lo, spread: arr[hi] - arr[lo] };
+    };
     const pp = v => `${Math.round(Math.abs(v) * 100)}%p`;
+    const listVals = (arr, fmt) => arr.map(fmt).join(' vs ');
 
-    const g = gap(kpis.growth.a, kpis.growth.b);
-    if (g !== null && Math.abs(g) >= 0.2) {
-      const [fast, slow] = g > 0 ? [A, B] : [B, A];
-      out.push({ tone: 'up', text: `성장 속도: ${ga(fast)} ${q(slow)}보다 최근 3년 증가율이 ${pp(g)} 높습니다 (${kpis.growth.a === null ? '—' : pct(kpis.growth.a)} vs ${kpis.growth.b === null ? '—' : pct(kpis.growth.b)}).` });
-    } else if (g !== null) {
-      out.push({ tone: 'flat', text: `성장 속도: 두 분야의 최근 3년 증가율 차이가 ${pp(g)}로 비슷한 수준입니다.` });
-    }
-    const gc = gap(kpis.companyShare.a, kpis.companyShare.b);
-    if (gc !== null && Math.abs(gc) >= 0.15) {
-      const [more, less] = gc > 0 ? [A, B] : [B, A];
-      out.push({ tone: 'info', text: `기업 참여: ${ga(more)} ${q(less)}보다 기업 수행 비중이 ${pp(gc)} 높습니다 (${pct(kpis.companyShare.a)} vs ${pct(kpis.companyShare.b)}). 낮은 쪽은 실증·사업화형 사업 공백 가능성을 점검하세요.` });
-    }
-    const gu = gap(kpis.universityShare.a, kpis.universityShare.b);
-    if (gu !== null && Math.abs(gu) >= 0.15) {
-      const [more, less] = gu > 0 ? [A, B] : [B, A];
-      out.push({ tone: 'info', text: `대학 수행: ${ga(more)} ${q(less)}보다 대학 비중이 ${pp(gu)} 높습니다 (${pct(kpis.universityShare.a)} vs ${pct(kpis.universityShare.b)}).` });
-    }
-    if (kpis.topMinistry.a && kpis.topMinistry.b) {
-      if (kpis.topMinistry.a === kpis.topMinistry.b) {
-        out.push({ tone: 'info', text: `주도 부처: 두 분야 모두 ${kpis.topMinistry.a}가 1위입니다 (${pct(kpis.topMinistryShare.a)} vs ${pct(kpis.topMinistryShare.b)}). 부처 간 연계 여지는 2위 이하 부처에서 찾아보세요.` });
+    // 지표 하나의 격차가 임계값 이상이면 최고·최저 분야를 문장으로 만든다.
+    const gapSignal = (arr, threshold, tone, make) => {
+      if (!valid(arr)) return;
+      const e = extremes(arr);
+      if (e.spread >= threshold) out.push({ tone, text: make(e) });
+    };
+
+    if (valid(kpis.growth)) {
+      const e = extremes(kpis.growth);
+      if (e.spread >= 0.2) {
+        out.push({ tone: 'up', text: `성장 속도: ${ga(names[e.hi])} 가장 빠르고 ${ga(names[e.lo])} 가장 느립니다 — 최근 3년 증가율 ${pp(e.spread)} 차이 (${listVals(kpis.growth, pct)}).` });
       } else {
-        out.push({ tone: 'info', text: `주도 부처: ${un(A)} ${kpis.topMinistry.a}(${pct(kpis.topMinistryShare.a)}), ${un(B)} ${kpis.topMinistry.b}(${pct(kpis.topMinistryShare.b)})${josa(kpis.topMinistry.b, '이', '가')} 주도합니다. 두 부처가 만나는 융합 사업의 근거가 될 수 있습니다.` });
+        out.push({ tone: 'flat', text: `성장 속도: 최근 3년 증가율 차이가 ${pp(e.spread)}로 비슷한 수준입니다 (${listVals(kpis.growth, pct)}).` });
       }
     }
-    const gh = gap(kpis.ministryHHI.a, kpis.ministryHHI.b);
-    if (gh !== null && Math.abs(gh) >= 1500) {
-      const [conc, disp] = gh > 0 ? [A, B] : [B, A];
-      out.push({ tone: 'warn', text: `부처 집중도: ${ga(conc)} ${q(disp)}보다 부처 집중도(HHI)가 높습니다 (${kpis.ministryHHI.a} vs ${kpis.ministryHHI.b}). 높은 쪽은 단일 부처 주도, 낮은 쪽은 다부처 조정이 쟁점입니다.` });
+    gapSignal(kpis.companyShare, 0.15, 'info', e => `기업 참여: ${ga(names[e.hi])} 가장 높고 ${ga(names[e.lo])} 가장 낮습니다 (${listVals(kpis.companyShare, pct)}). 낮은 쪽은 실증·사업화형 사업 공백 가능성을 점검하세요.`);
+    gapSignal(kpis.universityShare, 0.15, 'info', e => `대학 수행: ${ga(names[e.hi])} 가장 높고 ${ga(names[e.lo])} 가장 낮습니다 (${listVals(kpis.universityShare, pct)}).`);
+
+    if (kpis.topMinistry.every(Boolean)) {
+      if (new Set(kpis.topMinistry).size === 1) {
+        out.push({ tone: 'info', text: `주도 부처: 모든 분야에서 ${kpis.topMinistry[0]}${josa(kpis.topMinistry[0], '이', '가')} 1위입니다 (${listVals(kpis.topMinistryShare, pct)}). 부처 간 연계 여지는 2위 이하 부처에서 찾아보세요.` });
+      } else {
+        const parts = names.map((n, i) => `${un(n)} ${kpis.topMinistry[i]}(${pct(kpis.topMinistryShare[i])})`);
+        out.push({ tone: 'info', text: `주도 부처: ${parts.join(', ')}${josa(kpis.topMinistry[names.length - 1], '이', '가')} 주도합니다. 서로 다른 부처가 만나는 융합 사업의 근거가 될 수 있습니다.` });
+      }
     }
-    const gcap = gap(kpis.capitalShare.a, kpis.capitalShare.b);
-    if (gcap !== null && Math.abs(gcap) >= 0.15) {
-      const [more, less] = gcap > 0 ? [A, B] : [B, A];
-      out.push({ tone: 'warn', text: `수도권 집중: ${ga(more)} ${q(less)}보다 수도권 비중이 ${pp(gcap)} 높습니다 (${pct(kpis.capitalShare.a)} vs ${pct(kpis.capitalShare.b)}).` });
-    }
+    gapSignal(kpis.ministryHHI, 1500, 'warn', e => `부처 집중도: ${ga(names[e.hi])} 가장 집중되고 ${ga(names[e.lo])} 가장 분산돼 있습니다 — HHI ${listVals(kpis.ministryHHI, String)}. 높은 쪽은 단일 부처 주도, 낮은 쪽은 다부처 조정이 쟁점입니다.`);
+    gapSignal(kpis.capitalShare, 0.15, 'warn', e => `수도권 집중: ${ga(names[e.hi])} 가장 높고 ${ga(names[e.lo])} 가장 낮습니다 (${listVals(kpis.capitalShare, pct)}).`);
+
     const phase = (dims.find(d => d.key === 'byPhase') || { rows: [] }).rows
-      .filter(r => r.name !== '기타' && Math.abs(r.diff) >= 0.15).sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff))[0];
+      .filter(r => r.name !== '기타' && r.spread >= 0.15).sort((x, y) => y.spread - x.spread)[0];
     if (phase) {
-      const [more, less] = phase.diff > 0 ? [A, B] : [B, A];
-      out.push({ tone: 'gap', text: `연구단계: ${phase.name} 비중이 ${q(more)}에서 ${q(less)}보다 ${pp(phase.diff)} 높습니다 (${pct(phase.a)} vs ${pct(phase.b)}).` });
+      const e = extremes(phase.values);
+      out.push({ tone: 'gap', text: `연구단계: ${phase.name} 비중이 ${q(names[e.hi])}에서 가장 높고 ${q(names[e.lo])}에서 가장 낮습니다 (${listVals(phase.values, pct)}).` });
     }
     return out;
   }

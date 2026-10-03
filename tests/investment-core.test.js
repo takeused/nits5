@@ -97,28 +97,51 @@ test('연도별 건수는 첫 유효 연도를 100으로 한 지수로 바꾼다
   assert.equal(indexSeries([0, 0]).base, null);
 });
 
-test('두 분포는 합집합 항목으로 맞추고 기타·미상은 뺀다', () => {
-  const rows = alignShares(
+test('여러 분포는 합집합 항목으로 맞추고 기타·미상은 뺀다', () => {
+  const rows = alignShares([
     [{ name: '가', share: 0.6 }, { name: '기타', share: 0.4, isOther: true }],
     [{ name: '나', share: 0.7 }, { name: '가', share: 0.1 }, { name: '미상', share: 0.2 }],
-  );
-  assert.deepEqual(rows.map(r => [r.name, r.a, r.b]), [['나', 0, 0.7], ['가', 0.6, 0.1]]);
-  assert.equal(Math.round(rows[1].diff * 100), 50);
+    [{ name: '다', share: 0.5 }],
+  ]);
+  assert.deepEqual(rows.map(r => [r.name, ...r.values]), [['나', 0, 0.7, 0], ['가', 0.6, 0.1, 0], ['다', 0, 0, 0.5]]);
+  assert.equal(Math.round(rows[1].spread * 100), 60);   // 최대 0.6 - 최소 0
 });
 
+const sideA = () => side('인공지능', [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+  [rec({ gov: 500, ministry: '과학기술정보통신부', performer: '대학' }), rec({ gov: 500, ministry: '산업통상자원부', performer: '중소기업', business: '사업B' })], 8000);
+const sideB = () => side('재난안전', [100, 110, 120, 130, 140, 150, 150, 150, 150, 150],
+  [rec({ gov: 900, ministry: '행정안전부', performer: '출연연구소', phase: '개발연구', region: '대전광역시' })], 1000);
+const sideC = () => side('양자', [10, 20, 40, 80, 160, 320, 400, 500, 600, 700],
+  [rec({ gov: 800, ministry: '과학기술정보통신부', performer: '대학', phase: '기초연구' })], 500);
+
 test('두 키워드 비교는 규모 배수·지수·격차 신호를 만든다', () => {
-  const a = side('인공지능', [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
-    [rec({ gov: 500, ministry: '과학기술정보통신부', performer: '대학' }), rec({ gov: 500, ministry: '산업통상자원부', performer: '중소기업', business: '사업B' })], 8000);
-  const b = side('재난안전', [100, 110, 120, 130, 140, 150, 150, 150, 150, 150],
-    [rec({ gov: 900, ministry: '행정안전부', performer: '출연연구소', phase: '개발연구', region: '대전광역시' })], 1000);
-  const cmp = compareInvestment(a, b);
+  const cmp = compareInvestment([sideA(), sideB()]);
   assert.equal(cmp.scale.ratio, 8);
-  assert.equal(cmp.scale.larger, 'a');
-  assert.equal(cmp.index.a.values[0], 100);
-  assert.equal(cmp.index.b.values[9], 150);
-  assert.equal(cmp.kpis.topMinistry.b, '행정안전부');
+  assert.equal(cmp.scale.largest, 0);
+  assert.equal(cmp.scale.smallest, 1);
+  assert.equal(cmp.index[0].values[0], 100);
+  assert.equal(cmp.index[1].values[9], 150);
+  assert.equal(cmp.kpis.topMinistry[1], '행정안전부');
   const texts = cmp.signals.map(s => s.text).join(' | ');
-  assert.match(texts, /성장 속도: "인공지능"이 /);
+  assert.match(texts, /성장 속도: "인공지능"이 가장 빠르고 "재난안전"이 가장 느립니다/);
   assert.match(texts, /주도 부처: "인공지능"은 /);
   assert.equal(cmp.dims.length, 5);
+  assert.equal(cmp.dims[0].rows[0].values.length, 2);
+});
+
+test('세 키워드 비교는 지표를 3개씩 담고 최고·최저 분야로 신호를 요약한다', () => {
+  const cmp = compareInvestment([sideA(), sideB(), sideC()]);
+  assert.equal(cmp.queries.length, 3);
+  assert.equal(cmp.index.length, 3);
+  assert.equal(cmp.kpis.recentTotal.length, 3);
+  assert.equal(cmp.scale.ratio, 16);                         // 8000 / 500
+  assert.equal(cmp.scale.smallest, 2);
+  assert.ok(cmp.dims.every(d => d.rows.length <= 6 && d.rows.every(r => r.values.length === 3)));
+  const texts = cmp.signals.map(s => s.text).join(' | ');
+  assert.match(texts, /성장 속도: "양자"가 가장 빠르고 "재난안전"이 가장 느립니다/);
+  assert.match(texts, /주도 부처: "인공지능"은 .*"재난안전"은 .*"양자"는 /);
+});
+
+test('키워드가 2개 미만이면 비교하지 않는다', () => {
+  assert.throws(() => compareInvestment([sideA()]));
 });
