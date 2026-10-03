@@ -25,7 +25,7 @@ function openInvestmentCompare() {
       <p style="font-size:12px;color:#6b7280;margin:0 0 14px;">기술 키워드 2개(최대 3개)를 입력하면 규모·성장·투자 구조를 나란히 비교합니다. 3번째 키워드는 비워두면 2개만 비교합니다.</p>
       ${field(0, first, '예: 인공지능', false)}
       ${field(1, '', '예: 재난안전', false)}
-      ${field(2, '', '예: 양자', true)}
+      ${field(2, '', '예: 인공지능', true)}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
         <button type="button" id="investCmpCancel" class="btn-secondary text-sm">취소</button>
         <button type="button" id="investCmpGo" class="btn-primary text-sm">비교 분석</button>
@@ -141,6 +141,8 @@ function renderInvestmentCompare(sides, cmp) {
     scaleText = `가장 큰 "${escHtml(big)}"${InvestmentCore.josa(big, '이', '가')} 가장 작은 "${escHtml(small)}"의 약 ${cmp.scale.ratio.toFixed(1)}배`;
   }
 
+  const fallbackNote = cmp.index.some(ix => ix.baseIndex >= 0 && cmp.years[ix.baseIndex] !== cmp.baseYear)
+    ? ' 일부 분야는 해당 연도 건수가 없어 첫 유효 연도를 기준으로 했습니다.' : '';
   const rows = [
     ['최근 5년 과제 건수', k.recentTotal.map(v => `${v.toLocaleString()}건`)],
     ['성장 단계 (최근3년 vs 직전3년)', k.phase.map((p, i) => `${escHtml(p)} ${growthText(k.growth[i])}`)],
@@ -191,8 +193,8 @@ function renderInvestmentCompare(sides, cmp) {
         </div>
 
         <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:16px;margin-bottom:14px;">
-          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:2px;">성장 추세 비교 (지수: 각 분야 첫 유효 연도 = 100)</div>
-          <div style="font-size:10.5px;color:#98a2b3;margin-bottom:10px;">규모가 달라도 성장 속도를 비교할 수 있도록 지수로 환산했습니다. 실제 건수는 마우스를 올리면 표시됩니다.</div>
+          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:2px;">성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)</div>
+          <div style="font-size:10.5px;color:#98a2b3;margin-bottom:10px;">규모가 달라도 성장 속도를 비교할 수 있도록 모든 분야를 ${cmp.baseYear}년 건수 대비 지수로 환산했습니다(100 초과 = ${cmp.baseYear}년보다 증가). 실제 건수는 마우스를 올리면 표시됩니다.${fallbackNote}</div>
           <div style="position:relative;height:240px;"><canvas id="investCmpChart"></canvas></div>
         </div>
 

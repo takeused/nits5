@@ -92,9 +92,22 @@ const side = (query, counts, recs, recentTotal) => {
   return { query, agg, trend, meta: { recentTotal } };
 };
 
-test('연도별 건수는 첫 유효 연도를 100으로 한 지수로 바꾼다', () => {
-  assert.deepEqual(indexSeries([0, 100, 200, null, 50]).values, [null, 100, 200, null, 50]);
-  assert.equal(indexSeries([0, 0]).base, null);
+test('연도별 건수는 기준 연도를 100으로 한 지수로 바꾼다', () => {
+  assert.deepEqual(indexSeries([0, 100, 200, null, 50]).values, [null, 100, 200, null, 50]);   // 기준 미지정: 첫 유효 연도
+  assert.deepEqual(indexSeries([50, 100, 200], 1).values, [50, 100, 200]);                     // 두 번째 해=100
+  assert.equal(indexSeries([0, 0, 0], 1).base, null);
+  assert.equal(indexSeries([0, 0, 40], 1).baseIndex, 2);                                       // 기준 연도 값이 0이면 첫 유효 연도로 대체
+});
+
+test('초기 건수가 아주 적은 분야가 있어도 공통 기준 연도로 지수가 폭주하지 않는다', () => {
+  const tiny = side('신생', [1, 5, 20, 80, 300, 1000, 1200, 1300, 1400, 1500], [rec({})], 5000);
+  const big = side('성숙', [800, 850, 900, 950, 1000, 1000, 1000, 1000, 1000, 1000], [rec({})], 5000);
+  big.meta.recentFrom = tiny.meta.recentFrom = 2021;
+  const cmp = compareInvestment([tiny, big]);
+  assert.equal(cmp.baseYear, 2021);
+  assert.equal(cmp.index[0].values[5], 100);
+  assert.equal(cmp.index[0].values[9], 150);                                                   // 첫 해 기준이었다면 150000
+  assert.equal(cmp.index[1].values[0], 80);
 });
 
 test('여러 분포는 합집합 항목으로 맞추고 기타·미상은 뺀다', () => {
@@ -119,7 +132,7 @@ test('두 키워드 비교는 규모 배수·지수·격차 신호를 만든다'
   assert.equal(cmp.scale.ratio, 8);
   assert.equal(cmp.scale.largest, 0);
   assert.equal(cmp.scale.smallest, 1);
-  assert.equal(cmp.index[0].values[0], 100);
+  assert.equal(cmp.index[0].values[0], 100);   // meta.recentFrom 없음 → 첫 유효 연도 기준
   assert.equal(cmp.index[1].values[9], 150);
   assert.equal(cmp.kpis.topMinistry[1], '행정안전부');
   const texts = cmp.signals.map(s => s.text).join(' | ');

@@ -236,13 +236,17 @@
     ['byPhase', '연구개발단계별'], ['byRegion', '지역별 (시도)'],
   ];
 
-  function indexSeries(counts = []) {
-    const baseIdx = counts.findIndex(v => Number.isFinite(v) && v > 0);
+  // 지수 기준 연도: preferredIndex의 값이 유효(>0)하면 그 해를 100으로, 아니면 첫 유효 연도를 100으로 한다.
+  // 첫 해를 기준으로 삼으면 초기 건수가 아주 적은 분야(예: 디지털트윈)의 지수가 수만까지 치솟아
+  // 다른 분야가 바닥에 눌리므로, 비교에서는 모든 분야에 공통 기준 연도를 쓴다.
+  function indexSeries(counts = [], preferredIndex = -1) {
+    const valid = v => Number.isFinite(v) && v > 0;
+    const baseIdx = valid(counts[preferredIndex]) ? preferredIndex : counts.findIndex(valid);
     if (baseIdx < 0) return { base: null, baseIndex: -1, values: counts.map(() => null) };
     const base = counts[baseIdx];
     return {
       base, baseIndex: baseIdx,
-      values: counts.map((v, i) => (i < baseIdx || !Number.isFinite(v) ? null : Math.round((v / base) * 1000) / 10)),
+      values: counts.map((v, i) => (!Number.isFinite(v) || (baseIdx > i && !valid(v)) ? null : Math.round((v / base) * 1000) / 10)),
     };
   }
 
@@ -288,13 +292,17 @@
       privateRatio: pick(s => s.agg.privateRatio),
       capitalShare: pick(s => s.agg.capitalShare),
     };
+    const years = list[0].trend.years;
+    const baseYear = list[0].meta.recentFrom;                  // 최근 구간 시작 연도를 공통 기준(=100)으로
+    const baseIdx = years.indexOf(baseYear);
     const top = list.length >= 3 ? 6 : 8;
     const dims = COMPARE_DIMENSIONS.map(([key, title]) => ({ key, title, rows: alignShares(list.map(s => s.agg[key]), top) }));
     return {
       scale, kpis, dims,
       queries: list.map(s => s.query),
-      years: list[0].trend.years,
-      index: list.map(s => indexSeries(s.trend.counts)),
+      years,
+      baseYear,
+      index: list.map(s => indexSeries(s.trend.counts, baseIdx)),
       signals: buildCompareSignals(list, kpis, dims),
     };
   }
