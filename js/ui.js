@@ -422,7 +422,7 @@
     // (모델 선택은 API 키 등 민감정보를 노출하지 않으므로 이 수준의 게이트로 충분하다.)
 
     const AI_PROVIDER_OPTIONS = [
-      { value: 'auto',     label: '자동 (권장)', desc: 'Cerebras → Groq → (승인 후) Gemini 순으로 시도' },
+      { value: 'auto',     label: '자동 (권장)', desc: 'Groq(기본) → Cerebras → (승인 후) Gemini 순으로 시도. 앞 제공자가 실패하면 자동으로 다음으로 넘어감' },
       { value: 'cerebras', label: 'Cerebras 강제', desc: '폴백 없음. 아래 모델 사용' },
       { value: 'groq',     label: 'Groq 강제', desc: '폴백 없음. 서버 GROQ_MODEL(기본 openai/gpt-oss-120b) 사용' },
       { value: 'gemini',   label: 'Gemini 강제', desc: 'gemini-3.1-flash-lite로 바로 호출' },
@@ -532,7 +532,7 @@
       const label = STATE.aiProviderMode === 'gemini' ? 'Gemini 강제'
         : STATE.aiProviderMode === 'groq' ? 'Groq 강제'
         : STATE.aiProviderMode === 'cerebras' ? `Cerebras 강제 (${getCerebrasModelLabel(getActiveCerebrasModel())})`
-        : `자동 (Cerebras ${getCerebrasModelLabel(getActiveCerebrasModel())} → Groq → Gemini)`;
+        : `자동 (Groq → Cerebras ${getCerebrasModelLabel(getActiveCerebrasModel())} → Gemini)`;
       showToast(`AI 모델 설정 저장됨: ${label}`, 'success');
     }
 
@@ -563,7 +563,7 @@
         };
 
         // 서버가 어떤 키를 가졌는지 /health로 파악한 값 + Admin 제공자 설정으로 경로를 정한다.
-        // (구버전 프록시는 제공자 플래그가 없으므로 Cerebras를 기본으로 시도)
+        // (구버전 프록시는 제공자 플래그가 없으므로 Groq 플래그가 없으면 Cerebras로 시도)
         const hasCerebras = STATE.cerebrasConfigured !== false;
         const hasGroq     = STATE.groqConfigured === true;
         const hasGemini   = STATE.geminiConfigured === true;
@@ -576,9 +576,9 @@
         // 'Cerebras 강제' — 폴백 없이 Cerebras만 쓴다.
         if (providerMode === 'cerebras') return postTo('/cerebras');
 
-        // 자동: Cerebras → Groq 순으로 시도하고, 둘 다 실패하면 사용자 승인 후 Gemini로 전환한다.
+        // 자동: Groq(기본) → Cerebras 순으로 시도하고, 둘 다 실패하면 사용자 승인 후 Gemini로 전환한다.
         // (Gemini는 Google로 데이터가 전송되므로 승인 없이 자동 전환하지 않는다)
-        const chain = [hasCerebras && '/cerebras', hasGroq && '/groq'].filter(Boolean);
+        const chain = [hasGroq && '/groq', hasCerebras && '/cerebras'].filter(Boolean);
         let lastResp = null;
         let lastError = null;
         for (const endpoint of chain) {

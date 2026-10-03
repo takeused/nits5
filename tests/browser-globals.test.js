@@ -370,7 +370,7 @@ test('commerce analysis still renders diagnostics when no candidate passes forma
   assert.doesNotMatch(ui, /if \(!top3 \|\| top3\.length === 0\) \{[\s\S]{0,180}return;/);
 });
 
-test('auto AI routing falls back from Cerebras to Groq without asking for Gemini consent', async () => {
+test('auto AI routing tries Groq first, then falls back to Cerebras without asking for Gemini consent', async () => {
   const context = createBrowserContext();
   loadScript(context, 'js/state.js');
   loadScript(context, 'js/commerce-score.js');
@@ -378,25 +378,34 @@ test('auto AI routing falls back from Cerebras to Groq without asking for Gemini
   loadScript(context, 'js/ui.js');
 
   const called = [];
+  let groqUp = true;
   context.fetch = async (url) => {
-    called.push(String(url).replace(/^.*\//, '/'));
-    return String(url).endsWith('/groq')
-      ? { ok: true, status: 200, json: async () => ({}) }
-      : { ok: false, status: 404, json: async () => ({}) };
+    const endpoint = String(url).replace(/^.*\//, '/');
+    called.push(endpoint);
+    const ok = endpoint === '/groq' ? groqUp : endpoint === '/cerebras';
+    return ok ? { ok: true, status: 200, json: async () => ({}) } : { ok: false, status: 429, json: async () => ({}) };
   };
   vm.runInContext(`ACTIVE_PROXY = 'local';
     STATE.aiConfigured = true; STATE.cerebrasConfigured = true;
     STATE.groqConfigured = true; STATE.geminiConfigured = true; STATE.aiProviderMode = 'auto';`, context);
 
+  // 기본(자동): Groq가 응답하면 Cerebras를 부르지 않는다
   const resp = await context.cerebrasChat({ messages: [] }, 1000);
   assert.equal(resp.ok, true);
-  assert.deepEqual(called, ['/cerebras', '/groq']);
-
-  // Groq 강제는 Cerebras를 거치지 않는다
-  called.length = 0;
-  vm.runInContext("STATE.aiProviderMode = 'groq'", context);
-  await context.cerebrasChat({ messages: [] }, 1000);
   assert.deepEqual(called, ['/groq']);
+
+  // Groq가 실패(예: 429)하면 Cerebras로 넘어간다
+  called.length = 0;
+  groqUp = false;
+  const fallback = await context.cerebrasChat({ messages: [] }, 1000);
+  assert.equal(fallback.ok, true);
+  assert.deepEqual(called, ['/groq', '/cerebras']);
+
+  // Cerebras 강제는 Groq를 거치지 않는다
+  called.length = 0;
+  vm.runInContext("STATE.aiProviderMode = 'cerebras'", context);
+  await context.cerebrasChat({ messages: [] }, 1000);
+  assert.deepEqual(called, ['/cerebras']);
 });
 
 test('Cerebras browser requests extract an ASCII key from pasted descriptive text', async () => {

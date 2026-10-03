@@ -65,6 +65,72 @@ function investSetProgress(msg) {
   if (el) el.textContent = msg;
 }
 
+// 키워드 1개의 투자 지형 데이터를 수집·집계한다. 같은 검색어는 30분간 캐시(비교 분석 재사용).
+// isStale()이 true가 되면(새 분석이 시작되면) null을 돌려 중단한다.
+const _investCache = new Map();
+const INVEST_CACHE_TTL = 30 * 60 * 1000;
+
+async function collectInvestmentData(proxyBase, query, { isStale = () => false, label = '' } = {}) {
+  const cacheKey = query.trim().toLowerCase();
+  const cached = _investCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < INVEST_CACHE_TTL) return cached.data;
+
+  const lastYear = new Date().getFullYear() - 1;            // 완결 연도까지만
+  const years = Array.from({ length: INVEST_YEAR_SPAN }, (_, i) => lastYear - INVEST_YEAR_SPAN + 1 + i);
+  const recentFrom = lastYear - INVEST_RECENT_SPAN + 1;
+
+  // ① 연도별 과제 건수 (정확한 전체 건수)
+  let doneYears = 0;
+  const counts = await mapWithConcurrency(years, 2, async (y) => {
+    try {
+      const { totalHits } = await investNtisFetch(proxyBase, investParams(query, { addQuery: `PY=${y}/MORE,${y}/UNDER` }));
+      return totalHits;
+    } catch { return null; }
+    finally { investSetProgress(label + `연도별 과제 건수 집계 중... (${++doneYears}/${years.length})`); }
+  });
+  if (isStale()) return null;
+
+  // ② 최근 5년 투자 구조 표본
+  const rangeQuery = `PY=${recentFrom}/MORE,${lastYear}/UNDER`;
+  const first = await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery }));
+  const recentTotal = first.totalHits;
+  const pageCount = Math.min(INVEST_SAMPLE_PAGES, Math.ceil(recentTotal / NTIS_PAGE_SIZE));
+  const pages = [first.xml];
+  let failedPages = 0;
+  let donePages = 1;
+  investSetProgress(label + `최근 ${INVEST_RECENT_SPAN}년 과제 표본 수집 중... (1/${Math.max(1, pageCount)}페이지)`);
+  const rest = Array.from({ length: Math.max(0, pageCount - 1) }, (_, i) => (i + 1) * NTIS_PAGE_SIZE + 1);
+  const restXml = await mapWithConcurrency(rest, 2, async (start) => {
+    try {
+      return (await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery, startPosition: start }))).xml;
+    } catch { failedPages++; return null; }
+    finally { investSetProgress(label + `최근 ${INVEST_RECENT_SPAN}년 과제 표본 수집 중... (${++donePages}/${pageCount}페이지)`); }
+  });
+  if (isStale()) return null;
+  pages.push(...restXml.filter(Boolean));
+
+  const seen = new Set();
+  const records = [];
+  for (const xml of pages) {
+    for (const hit of Array.from(xml.getElementsByTagName('HIT'))) {
+      const r = investParseHit(hit);
+      const key = r.id || `${r.title}|${r.year}|${r.agency}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      records.push(r);
+    }
+  }
+
+  const agg = InvestmentCore.aggregateInvestment(records);
+  const trend = InvestmentCore.summarizeYearCounts(years, counts);
+  const insights = InvestmentCore.buildInvestmentInsights(agg, trend);
+  const meta = { query, years, recentFrom, lastYear, recentTotal, failedPages, sampleSize: records.length };
+  const data = { meta, agg, trend, insights };
+  // 일부 연도·페이지 조회가 실패한 결과는 캐시하지 않는다(재시도 시 완전한 결과를 받도록).
+  if (trend.complete && !failedPages) _investCache.set(cacheKey, { at: Date.now(), data });
+  return data;
+}
+
 async function runInvestmentAnalysis() {
   const query = document.getElementById('searchInput').value.trim() || STATE.currentQuery || '';
   if (!query) {
@@ -107,54 +173,10 @@ async function runInvestmentAnalysis() {
     </div>`;
 
   try {
-    // ① 연도별 과제 건수 (정확한 전체 건수)
-    let doneYears = 0;
-    const counts = await mapWithConcurrency(years, 2, async (y) => {
-      try {
-        const { totalHits } = await investNtisFetch(proxyBase, investParams(query, { addQuery: `PY=${y}/MORE,${y}/UNDER` }));
-        return totalHits;
-      } catch { return null; }
-      finally { investSetProgress(`연도별 과제 건수 집계 중... (${++doneYears}/${years.length})`); }
-    });
-    if (runSeq !== _investRunSeq) return;
-
-    // ② 최근 5년 투자 구조 표본
-    const rangeQuery = `PY=${recentFrom}/MORE,${lastYear}/UNDER`;
-    const first = await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery }));
-    const recentTotal = first.totalHits;
-    const pageCount = Math.min(INVEST_SAMPLE_PAGES, Math.ceil(recentTotal / NTIS_PAGE_SIZE));
-    const pages = [first.xml];
-    let failedPages = 0;
-    let donePages = 1;
-    investSetProgress(`최근 ${INVEST_RECENT_SPAN}년 과제 표본 수집 중... (1/${Math.max(1, pageCount)}페이지)`);
-    const rest = Array.from({ length: Math.max(0, pageCount - 1) }, (_, i) => (i + 1) * NTIS_PAGE_SIZE + 1);
-    const restXml = await mapWithConcurrency(rest, 2, async (start) => {
-      try {
-        return (await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery, startPosition: start }))).xml;
-      } catch { failedPages++; return null; }
-      finally { investSetProgress(`최근 ${INVEST_RECENT_SPAN}년 과제 표본 수집 중... (${++donePages}/${pageCount}페이지)`); }
-    });
-    if (runSeq !== _investRunSeq) return;
-    pages.push(...restXml.filter(Boolean));
-
-    const seen = new Set();
-    const records = [];
-    for (const xml of pages) {
-      for (const hit of Array.from(xml.getElementsByTagName('HIT'))) {
-        const r = investParseHit(hit);
-        const key = r.id || `${r.title}|${r.year}|${r.agency}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        records.push(r);
-      }
-    }
-
-    const agg = InvestmentCore.aggregateInvestment(records);
-    const trend = InvestmentCore.summarizeYearCounts(years, counts);
-    const insights = InvestmentCore.buildInvestmentInsights(agg, trend);
-    const meta = { query, years, recentFrom, lastYear, recentTotal, failedPages, sampleSize: records.length };
-    renderInvestmentDashboard(meta, agg, trend, insights);
-    generateInvestmentAISummary(runSeq, meta, agg, trend, insights);
+    const d = await collectInvestmentData(proxyBase, query, { isStale: () => runSeq !== _investRunSeq });
+    if (!d) return;
+    renderInvestmentDashboard(d.meta, d.agg, d.trend, d.insights);
+    generateInvestmentAISummary(runSeq, d.meta, d.agg, d.trend, d.insights);
   } catch (err) {
     if (runSeq !== _investRunSeq) return;
     console.error('[Investment]', err);

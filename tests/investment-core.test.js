@@ -6,6 +6,9 @@ const {
   aggregateInvestment,
   summarizeYearCounts,
   buildInvestmentInsights,
+  compareInvestment,
+  indexSeries,
+  alignShares,
 } = require('../js/investment-core.js');
 
 const rec = (over) => ({
@@ -80,4 +83,42 @@ test('개편으로 이름이 바뀐 부처(산업통상부)는 산업통상자�
   ]);
   assert.equal(agg.byMinistry.length, 1);
   assert.equal(agg.byMinistry[0].name, '산업통상자원부');
+});
+
+const years = [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
+const side = (query, counts, recs, recentTotal) => {
+  const agg = aggregateInvestment(recs);
+  const trend = summarizeYearCounts(years, counts);
+  return { query, agg, trend, meta: { recentTotal } };
+};
+
+test('연도별 건수는 첫 유효 연도를 100으로 한 지수로 바꾼다', () => {
+  assert.deepEqual(indexSeries([0, 100, 200, null, 50]).values, [null, 100, 200, null, 50]);
+  assert.equal(indexSeries([0, 0]).base, null);
+});
+
+test('두 분포는 합집합 항목으로 맞추고 기타·미상은 뺀다', () => {
+  const rows = alignShares(
+    [{ name: '가', share: 0.6 }, { name: '기타', share: 0.4, isOther: true }],
+    [{ name: '나', share: 0.7 }, { name: '가', share: 0.1 }, { name: '미상', share: 0.2 }],
+  );
+  assert.deepEqual(rows.map(r => [r.name, r.a, r.b]), [['나', 0, 0.7], ['가', 0.6, 0.1]]);
+  assert.equal(Math.round(rows[1].diff * 100), 50);
+});
+
+test('두 키워드 비교는 규모 배수·지수·격차 신호를 만든다', () => {
+  const a = side('인공지능', [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+    [rec({ gov: 500, ministry: '과학기술정보통신부', performer: '대학' }), rec({ gov: 500, ministry: '산업통상자원부', performer: '중소기업', business: '사업B' })], 8000);
+  const b = side('재난안전', [100, 110, 120, 130, 140, 150, 150, 150, 150, 150],
+    [rec({ gov: 900, ministry: '행정안전부', performer: '출연연구소', phase: '개발연구', region: '대전광역시' })], 1000);
+  const cmp = compareInvestment(a, b);
+  assert.equal(cmp.scale.ratio, 8);
+  assert.equal(cmp.scale.larger, 'a');
+  assert.equal(cmp.index.a.values[0], 100);
+  assert.equal(cmp.index.b.values[9], 150);
+  assert.equal(cmp.kpis.topMinistry.b, '행정안전부');
+  const texts = cmp.signals.map(s => s.text).join(' | ');
+  assert.match(texts, /성장 속도: "인공지능"이 /);
+  assert.match(texts, /주도 부처: "인공지능"은 /);
+  assert.equal(cmp.dims.length, 5);
 });
