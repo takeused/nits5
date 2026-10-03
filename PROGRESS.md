@@ -12,7 +12,7 @@
 - 서버 비밀값(`.env`, git 제외): ScienceON/NTIS/Gemini/Groq 키, `PROXY_TOKEN`, `ADMIN_PASSCODE`.
 - AI 제공자 자동 순서: **Groq → Cerebras → (사용자 승인 후) Gemini**. 앞 제공자가 실패하면 다음으로 넘어가며, Admin 패널에서 제공자를 강제 선택할 수 있다. 2026-10-03 기준 Cerebras는 402(쿼터)로 막혀 Groq가 응답한다.
 - Admin 패널 암호는 소스에 두지 않고 프록시 `/admin/verify`가 `.env`의 `ADMIN_PASSCODE`로 검증한다(5회 실패 시 1분 잠금, 대소문자·공백 무시). 암호 변경은 `.env` 수정 후 프록시 재시작이면 되고 푸시는 필요 없다.
-- `js/state.js`의 `BROWSER_API_MODE`는 코드상 `true`로 남아 있다. 배포 경로는 프록시 서버 키를 우선 사용하도록 고쳐 두었으나(`PROXY_AVAILABLE && STATE.xxxConfigured` 패턴), 이 플래그가 켜진 상태라는 점은 배포 전 점검 항목으로 유지한다.
+- `js/state.js`의 `BROWSER_API_MODE = false`(2026-10-03 정리). 모든 인증은 프록시 서버 키로만 처리하고, 프록시가 없으면 브라우저 자격증명으로 ScienceON 토큰을 발급하거나 NTIS를 직접 부르지 않는다. `BROWSER_API_CONFIG`는 빈 값으로 유지한다. 로컬 실험 때만 임시로 `true`로 바꾸고 커밋하지 않는다.
 - 공통 API 주소 도우미 `getProxyBase()`와 `getApiBase()`는 `js/state.js`에 있다.
 
 ## 최근 완료: 정부 R&D 투자 지형 분석·비교 (2026-10-03)
@@ -224,7 +224,7 @@ node --test tests\browser-globals.test.js tests\budget-core.test.js tests\commer
 1. 현재 `후보군 대비 IP 공백` 기준선은 한 번의 분석에서 AI가 만든 후보들의 중앙값이다. 산업 전체 기준으로 만들려면 IPC/CPC 분류, 특허 패밀리, 권리 상태 데이터를 연동해야 한다.
 2. 특허 건수만으로 FTO·유효권리·청구항 범위·시장성을 판단할 수 없다. 최종 투자 또는 사업화 결정 전 별도 검토가 필요하다.
 3. NTIS 조회는 현재 프록시 경로가 필요할 수 있다. 브라우저 직접 실행 환경에서 NTIS 결과가 오류이면 프록시 실행 상태와 CORS를 먼저 확인한다.
-4. 배포 점검: `BROWSER_API_MODE`가 아직 `true`다. 배포 경로는 프록시 서버 키를 우선 쓰지만, 브라우저 구성에 개발용 키가 남아 있지 않은지 확인하고 플래그를 끄는 정리가 남아 있다.
+4. (해결 2026-10-03) `BROWSER_API_MODE`를 `false`로 정리했다. 이전에 브라우저 설정 창에 키를 입력했던 브라우저는 localStorage(`sc_api_key`, `sc_mac_addr`, `sc_ntis_key`, `sc_cerebras_key`)에 값이 남아 있을 수 있으니, 설정 창에서 지우거나 사이트 데이터를 삭제한다.
 5. 연구–IP 전환 공백 분석은 실제 API 브라우저 통합 검증이 아직 없다. 다음 작업 시 대표 키워드 2~3개로 결과·오류 상태·Top 3 다양성을 확인한다.
 
 ## 다음 고도화 후보: 산업 기준 IP 공백

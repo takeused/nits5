@@ -12,7 +12,7 @@
       ntisKey: '',
       cerebrasKey: '',
       aiModelMode: localStorage.getItem('sc_ai_model_mode') || 'zai-glm-4.7',
-      // AI 제공자 선택(Admin 패널): 'auto'(Cerebras→Groq→Gemini 폴백) | 'cerebras' | 'groq' | 'gemini'
+      // AI 제공자 선택(Admin 패널): 'auto'(Groq→Cerebras→Gemini 폴백) | 'cerebras' | 'groq' | 'gemini'
       aiProviderMode: localStorage.getItem('sc_ai_provider_mode') || 'auto',
       aiConfigured: false,
       cerebrasConfigured: undefined,  // /health 미제공(구버전 프록시) 시 undefined → Cerebras 시도
@@ -36,10 +36,9 @@
 
     // 인증정보는 소스에 포함하지 않는다. 로컬 프록시는 .env, Vercel은
     // 프로젝트 환경변수에서 읽는다.
-    // Development-only browser configuration. Fill these values locally while
-    // working on the site, then move them back to server environment variables
-    // before publishing.
-    const BROWSER_API_MODE = true;
+    // BROWSER_API_MODE: true면 프록시 없이 브라우저에 입력한 키로 ScienceON 토큰을 직접 발급하고
+    // NTIS를 직접 호출한다(로컬 개발 전용). 운영은 false — 모든 인증은 프록시 서버 키로만 처리한다.
+    const BROWSER_API_MODE = false;
     const BROWSER_API_CONFIG = Object.freeze({
       clientId: '',
       apiKey: '',

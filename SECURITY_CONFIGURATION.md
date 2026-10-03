@@ -36,8 +36,13 @@ Cerebras 요청은 `/cerebras` 서버리스 프록시에서 인증정보를 주�
 - 특허 패밀리·시장·TRL 확장 데이터는 연결 전까지 `not_connected`로 기록됩니다.
 # Local browser development mode
 
-While the site is being developed locally, `BROWSER_API_MODE` is enabled in
-`js/state.js`. Enter development API keys in `BROWSER_API_CONFIG` or through
-the API settings dialog; values entered in the dialog are stored only in that
-browser's local storage. Set `BROWSER_API_MODE` to `false` and remove browser
-keys before publishing.
+`BROWSER_API_MODE` in `js/state.js` is `false` (production, since 2026-10-03):
+every credential lives on the proxy server (`.env` locally, project
+environment variables on Vercel), and without a connected proxy the site does
+not issue ScienceON tokens or call NTIS from the browser. `BROWSER_API_CONFIG`
+holds no keys and must stay empty.
+
+For local-only experiments without the proxy you can temporarily set
+`BROWSER_API_MODE = true` and enter development keys in the API settings
+dialog (stored only in that browser's local storage). Do not commit that
+change, and clear the keys afterwards.

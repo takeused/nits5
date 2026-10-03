@@ -481,3 +481,20 @@ test('invalid Cerebras browser keys fail before fetch builds a header', async ()
   await assert.rejects(context.cerebrasChat({ messages: [] }, 1000), /AI_KEY_INVALID/);
   assert.equal(called, false);
 });
+
+test('production mode never issues a ScienceON token from browser credentials when no proxy is connected', async () => {
+  const context = createBrowserContext();
+  loadScript(context, 'js/state.js');
+  loadScript(context, 'js/commerce-score.js');
+  loadScript(context, 'js/budget-core.js');
+  loadScript(context, 'js/ui.js');
+
+  const called = [];
+  context.fetch = async (url) => { called.push(String(url)); return { ok: true, status: 200, json: async () => ({}) }; };
+  vm.runInContext(`ACTIVE_PROXY = 'direct';
+    STATE.clientId = 'client'; STATE.apiKey = 'key'; STATE.macAddr = '00:11:22:33:44:55';`, context);
+
+  assert.equal(vm.runInContext('BROWSER_API_MODE', context), false);
+  await context.autoRequestToken();
+  assert.deepEqual(called, []);
+});

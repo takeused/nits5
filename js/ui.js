@@ -649,7 +649,7 @@
       STATE.aiModelMode = aiModelInput?.value || STATE.aiModelMode || AI_MODEL_MODES.GLM;
       if (!Object.values(AI_MODEL_MODES).includes(STATE.aiModelMode)) STATE.aiModelMode = AI_MODEL_MODES.GLM;
       const rawCerebrasKey = document.getElementById('cerebrasKeyInput').value.trim();
-      if (BROWSER_API_MODE && rawCerebrasKey && !isValidCerebrasKey(rawCerebrasKey)) {
+      if (rawCerebrasKey && !isValidCerebrasKey(rawCerebrasKey)) {
         showToast('Cerebras API 키 형식이 올바르지 않습니다. csk-로 시작하는 키만 입력해주세요.', 'warning');
         document.getElementById('cerebrasKeyInput').focus();
         return;
@@ -1006,6 +1006,9 @@
           const accounts = encryptNTISAccounts(apiKey, macAddr);
           if (!accounts) return;
           url = `${TOKEN_URL_DIRECT}?accounts=${encodeURIComponent(accounts)}&client_id=${encodeURIComponent(clientId)}`;
+        } else if (!PROXY_AVAILABLE) {
+          // 운영 모드에서 프록시가 없으면 발급하지 않는다(브라우저 자격증명 직접 사용 금지).
+          return;
         } else if (ACTIVE_PROXY === 'worker') {
           if (!clientId || !apiKey || !macAddr) return;
           const accounts = encryptNTISAccounts(apiKey, macAddr);
