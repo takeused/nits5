@@ -193,8 +193,14 @@ function renderInvestmentCompare(sides, cmp) {
         </div>
 
         <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:16px;margin-bottom:14px;">
-          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:2px;">성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)</div>
-          <div style="font-size:10.5px;color:#98a2b3;margin-bottom:10px;">규모가 달라도 성장 속도를 비교할 수 있도록 모든 분야를 ${cmp.baseYear}년 건수 대비 지수로 환산했습니다(100 초과 = ${cmp.baseYear}년보다 증가). 실제 건수는 마우스를 올리면 표시됩니다.${fallbackNote}</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px;">
+            <div id="investCmpChartTitle" style="font-size:12px;font-weight:700;color:#344054;"></div>
+            <div role="group" aria-label="그래프 보기 전환" style="display:inline-flex;border:1px solid #d0d5dd;border-radius:8px;overflow:hidden;">
+              <button type="button" id="investCmpViewCount" onclick="setInvestCmpView('count')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;cursor:pointer;">실제 건수</button>
+              <button type="button" id="investCmpViewIndex" onclick="setInvestCmpView('index')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;border-left:1px solid #d0d5dd;cursor:pointer;">성장 지수</button>
+            </div>
+          </div>
+          <div id="investCmpChartNote" style="font-size:10.5px;color:#98a2b3;margin-bottom:10px;"></div>
           <div style="position:relative;height:240px;"><canvas id="investCmpChart"></canvas></div>
         </div>
 
@@ -222,36 +228,69 @@ function renderInvestmentCompare(sides, cmp) {
       </div>
     </div>`;
 
-  requestAnimationFrame(() => {
-    const ctx = document.getElementById('investCmpChart');
-    if (!ctx || typeof Chart === 'undefined') return;
-    if (window._investCmpChartInstance) window._investCmpChartInstance.destroy();
-    const datasets = sides.map((side, i) => ({
-      label: side.query,
-      data: cmp.index[i].values,
-      rawCounts: side.trend.counts,
-      borderColor: INVEST_CMP_COLORS[i], backgroundColor: INVEST_CMP_COLORS[i],
-      borderWidth: 2.5, pointRadius: 3, tension: 0.25, spanGaps: false,
-    }));
-    window._investCmpChartInstance = new Chart(ctx, {
-      type: 'line',
-      data: { labels: cmp.years.map(String), datasets },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { position: 'bottom', labels: { usePointStyle: true, color: '#475467' } },
-          tooltip: { callbacks: { label: c => {
-            const raw = c.dataset.rawCounts[c.dataIndex];
-            return `${c.dataset.label}: 지수 ${c.raw === null ? '—' : c.raw}${raw === null || raw === undefined ? '' : ` (${Number(raw).toLocaleString()}건)`}`;
-          } } },
-        },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: '#667085' } },
-          y: { beginAtZero: true, grid: { color: 'rgba(52,64,84,0.08)' }, ticks: { color: '#667085' } },
-        },
+  _investCmpData = { sides, cmp, fallbackNote };
+  _investCmpView = 'count';
+  requestAnimationFrame(drawInvestCmpChart);
+}
+
+// 그래프 보기 전환: 'count'(실제 건수, 로그 눈금 — 규모 순서가 보임) / 'index'(성장 지수 — 성장 속도만 비교)
+let _investCmpView = 'count';
+let _investCmpData = null;
+
+function setInvestCmpView(view) {
+  _investCmpView = view === 'index' ? 'index' : 'count';
+  drawInvestCmpChart();
+}
+
+function drawInvestCmpChart() {
+  const ctx = document.getElementById('investCmpChart');
+  if (!ctx || !_investCmpData || typeof Chart === 'undefined') return;
+  const { sides, cmp, fallbackNote } = _investCmpData;
+  const isCount = _investCmpView === 'count';
+
+  // 전환 버튼·제목·설명 갱신
+  const on = 'background:#344054;color:#fff;', off = 'background:#fff;color:#475467;';
+  const setBtn = (id, active) => { const el = document.getElementById(id); if (el) el.style.cssText = `padding:5px 12px;font-size:11.5px;font-weight:700;border:0;cursor:pointer;${id.endsWith('Index') ? 'border-left:1px solid #d0d5dd;' : ''}${active ? on : off}`; };
+  setBtn('investCmpViewCount', isCount);
+  setBtn('investCmpViewIndex', !isCount);
+  const title = document.getElementById('investCmpChartTitle');
+  const note = document.getElementById('investCmpChartNote');
+  if (title) title.textContent = isCount ? '과제 건수 비교 (실제 건수, 로그 눈금)' : `성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
+  if (note) note.textContent = isCount
+    ? '규모가 서로 달라도 모두 보이도록 세로축을 로그 눈금(10·100·1,000…)으로 그렸습니다. 선이 위에 있을수록 건수가 많고, 기울기가 가파를수록 빠르게 늘고 있습니다.'
+    : `규모가 아니라 ${cmp.baseYear}년 대비 증가 배수입니다(100 초과 = ${cmp.baseYear}년보다 증가). 건수가 많은 분야가 아래에 있을 수 있습니다. 실제 건수는 마우스를 올리면 표시됩니다.${fallbackNote}`;
+
+  if (window._investCmpChartInstance) window._investCmpChartInstance.destroy();
+  const datasets = sides.map((side, i) => ({
+    label: side.query,
+    // 로그 눈금은 0 이하를 그릴 수 없으므로 0건은 빈 값으로 둔다
+    data: isCount ? side.trend.counts.map(v => (Number.isFinite(v) && v > 0 ? v : null)) : cmp.index[i].values,
+    rawCounts: side.trend.counts,
+    borderColor: INVEST_CMP_COLORS[i], backgroundColor: INVEST_CMP_COLORS[i],
+    borderWidth: 2.5, pointRadius: 3, tension: isCount ? 0.15 : 0.25, spanGaps: false,
+  }));
+  window._investCmpChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: { labels: cmp.years.map(String), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { usePointStyle: true, color: '#475467' } },
+        tooltip: { callbacks: { label: c => {
+          const raw = c.dataset.rawCounts[c.dataIndex];
+          const rawText = raw === null || raw === undefined ? '조회 실패' : `${Number(raw).toLocaleString()}건`;
+          return isCount ? `${c.dataset.label}: ${rawText}`
+            : `${c.dataset.label}: 지수 ${c.raw === null ? '—' : c.raw}${raw === null || raw === undefined ? '' : ` (${rawText})`}`;
+        } } },
       },
-    });
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#667085' } },
+        y: isCount
+          ? { type: 'logarithmic', min: 1, grid: { color: 'rgba(52,64,84,0.08)' }, ticks: { color: '#667085', callback: v => ([1, 10, 100, 1000, 10000, 100000].includes(Number(v)) ? Number(v).toLocaleString() : '') } }
+          : { beginAtZero: true, grid: { color: 'rgba(52,64,84,0.08)' }, ticks: { color: '#667085' } },
+      },
+    },
   });
 }
 
