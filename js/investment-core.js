@@ -14,6 +14,10 @@
     return Number.isFinite(n) && n > 0 ? n : 0;
   };
 
+  // 2025년 조직개편으로 이름이 바뀐 부처는 한 부처로 합산한다(표기만 다른 같은 부처가 둘로 갈리는 것 방지).
+  const MINISTRY_ALIASES = { '산업통상부': '산업통상자원부' };
+  const normMinistry = name => MINISTRY_ALIASES[name] || name;
+
   // "부산광역시 사하구" → "부산". 시도 단위로 묶어 지역 분포를 본다.
   const PROVINCES = [
     ['서울', /^서울/], ['부산', /^부산/], ['대구', /^대구/], ['인천', /^인천/],
@@ -113,7 +117,7 @@
       b.names.set(name, (b.names.get(name) || 0) + 1);
       b.gov += positive(r.gov);
       b.count += 1;
-      if (r.ministry) b.ministries.set(r.ministry, (b.ministries.get(r.ministry) || 0) + 1);
+      if (r.ministry) { const m = normMinistry(r.ministry); b.ministries.set(m, (b.ministries.get(m) || 0) + 1); }
       if (Number(r.year)) b.years.push(Number(r.year));
       if (r.title) b.titles.add(normTitle(r.title));
     }
@@ -129,7 +133,7 @@
       share: gov > 0 ? b.gov / gov : 0,
     })).sort((a, b) => b.gov - a.gov || b.count - a.count);
 
-    const byMinistry = groupBy(list, r => r.ministry, { top: 6 });
+    const byMinistry = groupBy(list, r => normMinistry(r.ministry), { top: 6 });
     const byPerformer = groupBy(list, r => performerGroup(r.performer), { top: 7 });
     const byPhase = groupBy(list, r => phaseGroup(r.phase), { top: 6 });
     const byRegion = groupBy(list, r => regionProvince(r.region), { top: 8 });

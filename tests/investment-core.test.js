@@ -72,3 +72,12 @@ test('규칙 기반 시사점은 부처 집중·기업 참여 저조·단계 편
   assert.match(texts, /수도권 집중/);
   assert.match(texts, /정체·성숙/);
 });
+
+test('개편으로 이름이 바뀐 부처(산업통상부)는 산업통상자원부로 합산한다', () => {
+  const agg = aggregateInvestment([
+    rec({ title: 'A', gov: 200, ministry: '산업통상자원부' }),
+    rec({ title: 'B', gov: 100, ministry: '산업통상부', business: '사업B' }),
+  ]);
+  assert.equal(agg.byMinistry.length, 1);
+  assert.equal(agg.byMinistry[0].name, '산업통상자원부');
+});
