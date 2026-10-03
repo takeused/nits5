@@ -418,10 +418,8 @@
     }
 
     // ── Admin 패널 (LLM 제공자·모델 선택) ───────────────────────────
-    // 주의: 정적 웹이라 이 암호는 소스에 노출되는 "소프트 게이트"이며 진짜 보안이 아니다.
-    // (모델 선택은 API 키 등 민감정보를 노출하지 않으므로 이 수준으로 충분하다.)
-    // 암호를 바꾸려면 아래 한 줄만 수정하면 된다.
-    const ADMIN_PASSCODE = 'ntis2026';
+    // 암호는 소스에 두지 않는다. 프록시 서버(.env의 ADMIN_PASSCODE)가 /admin/verify로 검증한다.
+    // (모델 선택은 API 키 등 민감정보를 노출하지 않으므로 이 수준의 게이트로 충분하다.)
 
     const AI_PROVIDER_OPTIONS = [
       { value: 'auto',     label: '자동 (권장)', desc: 'Cerebras → Groq → (승인 후) Gemini 순으로 시도' },
@@ -430,15 +428,27 @@
       { value: 'gemini',   label: 'Gemini 강제', desc: 'gemini-3.1-flash-lite로 바로 호출' },
     ];
 
-    function openAdminPanel() {
+    async function openAdminPanel() {
       if (sessionStorage.getItem('sc_admin_ok') === '1') { showAdminPanel(); return; }
       const input = prompt('관리자 암호를 입력하세요');
       if (input === null) return;                     // 취소
-      // 자동 대문자화(모바일)·앞뒤/중간 공백·전각 문자(한글 IME)를 모두 흡수한다.
-      // NFKC로 전각→반각 정규화 후 모든 공백 제거 + 소문자 비교. 소프트 게이트라 무방.
-      const norm = (s) => String(s).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
-      if (norm(input) !== norm(ADMIN_PASSCODE)) {
-        showToast('암호가 올바르지 않습니다.', 'error');
+      const proxyBase = getProxyBase() || VERCEL_BASE;
+      if (!proxyBase) {
+        showToast('프록시 서버에 연결되어 있지 않아 암호를 확인할 수 없습니다.', 'warning');
+        return;
+      }
+      try {
+        const resp = await fetch(`${proxyBase}/admin/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ passcode: input }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (resp.status === 429) { showToast('시도가 너무 많습니다. 잠시 후 다시 시도하세요.', 'warning'); return; }
+        if (resp.status === 503) { showToast('서버에 관리자 암호가 설정되어 있지 않습니다 (.env ADMIN_PASSCODE).', 'error'); return; }
+        if (!resp.ok) { showToast('암호가 올바르지 않습니다.', 'error'); return; }
+      } catch {
+        showToast('프록시 서버에 연결할 수 없어 암호를 확인하지 못했습니다.', 'error');
         return;
       }
       sessionStorage.setItem('sc_admin_ok', '1');     // 이 탭 세션 동안 재입력 생략

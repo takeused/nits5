@@ -85,6 +85,19 @@ function proxyTokenMatches(given) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// ── Admin 패널 암호 검증 — 암호는 .env의 ADMIN_PASSCODE에만 두고 소스/브라우저에는 두지 않는다.
+// 자동 대문자화·공백·전각 문자(한글 IME)를 흡수하도록 NFKC 정규화 후 공백 제거·소문자 비교.
+const ADMIN_PASSCODE = process.env.ADMIN_PASSCODE || '';
+const normPasscode = s => String(s).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+const adminFails = { count: 0, lockedUntil: 0 };   // 무차별 대입 억제: 5회 실패 시 1분 잠금
+
+function adminPasscodeMatches(given) {
+  if (!ADMIN_PASSCODE || typeof given !== 'string') return false;
+  const a = crypto.createHash('sha256').update(normPasscode(given)).digest();
+  const b = crypto.createHash('sha256').update(normPasscode(ADMIN_PASSCODE)).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 // ── 서버 환경변수 자격증명 (인트라넷 다중 PC 지원) ────────────────
 const REGISTERED = {
   clientId: process.env.SC_CLIENT_ID || '',
@@ -368,6 +381,20 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // ── /admin/verify — Admin 패널 암호 확인
+    if (pathname === '/admin/verify') {
+      if (req.method !== 'POST') return sendJSON(res, 405, { error: 'POST required' });
+      if (!ADMIN_PASSCODE) return sendJSON(res, 503, { error: 'ADMIN_PASSCODE_NOT_CONFIGURED', message: '서버 .env에 ADMIN_PASSCODE가 없습니다' });
+      if (Date.now() < adminFails.lockedUntil) return sendJSON(res, 429, { error: 'TOO_MANY_ATTEMPTS', message: '시도가 너무 많습니다. 잠시 후 다시 시도하세요' });
+      const body = await readJSONBody(req);
+      if (adminPasscodeMatches(body && body.passcode)) {
+        adminFails.count = 0;
+        return sendJSON(res, 200, { ok: true });
+      }
+      if (++adminFails.count >= 5) { adminFails.count = 0; adminFails.lockedUntil = Date.now() + 60000; }
+      return sendJSON(res, 401, { ok: false });
+    }
+
     // ── /cerebras — API 키를 브라우저에 노출하지 않는 서버 측 AI 프록시
     if (pathname === '/cerebras') {
       if (req.method !== 'POST') return sendJSON(res, 405, { error: 'POST required' });
@@ -585,7 +612,7 @@ server.listen(PORT, '0.0.0.0', () => {
   ips.forEach(ip => console.log(`   인트라넷:  http://${ip}:${PORT}  ← 같은 네트워크 PC에서 이 주소로 접속`));
   console.log(`\n   📂 정적 파일 서빙: http://<IP>:${PORT}/  → index.html 직접 제공`);
   console.log(`   🔔 NTIS 승인 IP: 1.252.84.41 (정박사님 PC)`);
-  console.log(`   API: /health  /token  /api  /ntis  /ntis/connection\n`);
+  console.log(`   API: /health  /admin/verify  /token  /api  /ntis  /ntis/connection\n`);
 });
 
 server.on('error', (err) => {
