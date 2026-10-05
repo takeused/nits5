@@ -14,6 +14,7 @@ const INVEST_CMP_PHASE_TONE = {
 };
 const INVEST_CMP_HEADER_COLORS = ['#93c5fd', '#fdba74', '#86efac'];   // 어두운 헤더 위에서 읽히는 밝은 톤
 const INVEST_CMP_LABELS = ['A', 'B', 'C'];
+const INVEST_CMP_SPAN = 3;   // 비교 기간: 최근 3년(건수·연구비·투자 구조 모두)
 let _investCmpSeq = 0;
 
 function openInvestmentCompare() {
@@ -98,7 +99,7 @@ async function runInvestmentCompare(queries) {
     // NTIS 호출 제한(429)을 피하려고 키워드를 순차로 수집한다. 캐시된 키워드는 즉시 반환된다.
     const sides = [];
     for (let i = 0; i < queries.length; i++) {
-      const data = await collectInvestmentData(proxyBase, queries[i], { isStale, label: `[${INVEST_CMP_LABELS[i]} ${queries[i]}] `, withFunding: true });
+      const data = await collectInvestmentData(proxyBase, queries[i], { isStale, label: `[${INVEST_CMP_LABELS[i]} ${queries[i]}] `, withFunding: true, spans: { years: INVEST_CMP_SPAN, recent: INVEST_CMP_SPAN, fund: INVEST_CMP_SPAN } });
       if (!data) return;
       sides.push({ query: queries[i], ...data });
     }
@@ -163,7 +164,7 @@ function renderInvestmentCompare(sides, cmp) {
     ? ' 일부 분야는 해당 연도 건수가 없어 첫 유효 연도를 기준으로 했습니다.' : '';
   if (cmp.fundScale?.ratio) {
     const big = names[cmp.fundScale.largest], small = names[cmp.fundScale.smallest];
-    scaleText += ` · 최근 5년 정부연구비(추정)는 "${escHtml(big)}"${InvestmentCore.josa(big, '이', '가')} "${escHtml(small)}"의 약 ${cmp.fundScale.ratio.toFixed(1)}배`;
+    scaleText += ` · 정부연구비는 "${escHtml(big)}"${InvestmentCore.josa(big, '이', '가')} "${escHtml(small)}"의 약 ${cmp.fundScale.ratio.toFixed(1)}배`;
   }
 
   // 분야별 요약 카드 — 그래프보다 먼저 결론(과제 수·연구비 성장 신호와 규모)이 보이게 한다
@@ -191,19 +192,19 @@ function renderInvestmentCompare(sides, cmp) {
         </div>
         ${signalLine('과제 수', t.phase, t.growth)}
         ${signalLine(`연구비${est}`, f.phase || '판정 불가', f.growth ?? null)}
-        <div style="font-size:10.5px;color:#98a2b3;margin:2px 0 10px;">최근 3년 평균, 직전 3년 대비</div>
+        <div style="font-size:10.5px;color:#98a2b3;margin:2px 0 10px;">증감: ${escHtml(t.growthLabel || '')}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 6px;">
           ${stat(`${cmp.years.length}년 총 과제`, `${t.total.toLocaleString()}건`)}
-          ${stat(`최근 5년 정부연구비${est}`, investMoneyText(f.recentTotal))}
-          ${stat('최근 5년 과제당 평균', investMoneyText(f.recentPerProject, true))}
+          ${stat(`${cmp.years.length}년 정부연구비${est}`, investMoneyText(f.recentTotal))}
+          ${stat('과제당 평균', investMoneyText(f.recentPerProject, true))}
           ${stat('정점 (과제 / 연구비)', `${t.peakYear || '—'} / ${f.peakYear || '—'}`)}
         </div>
       </div>`;
   }).join('');
 
   const rows = [
-    ['최근 5년 과제 건수', k.recentTotal.map(v => `${v.toLocaleString()}건`)],
-    ['최근 5년 정부연구비', k.fundRecentTotal.map((v, i) => `${investMoneyText(v)}${sides[i].funding?.mode === 'census' ? '' : ' <span style="color:#b45309;font-weight:500;">(추정)</span>'}`)],
+    [`${cmp.years.length}년 과제 건수`, k.recentTotal.map(v => `${v.toLocaleString()}건`)],
+    [`${cmp.years.length}년 정부연구비`, k.fundRecentTotal.map((v, i) => `${investMoneyText(v)}${sides[i].funding?.mode === 'census' ? '' : ' <span style="color:#b45309;font-weight:500;">(추정)</span>'}`)],
     ['과제당 평균 정부연구비', k.perProject.map((v, i) => `${investMoneyText(v, true)}${sides[i].funding?.mode === 'census' ? '' : ' <span style="color:#b45309;font-weight:500;">(추정)</span>'}`)],
     ['주도 부처', k.topMinistry.map((m, i) => `${escHtml(m || '—')} <span style="color:#98a2b3;">${pctText(k.topMinistryShare[i])}</span>`)],
     ['부처 집중도 (HHI)', k.ministryHHI.map(v => String(v ?? '—'))],
@@ -287,8 +288,8 @@ function renderInvestmentCompare(sides, cmp) {
 
         <div style="font-size:11px;color:#98a2b3;line-height:1.7;">
           투자 구조 기준: ${recentFrom}~${lastYear}년 과제의 정부연구비 비중 — ${sides.map(sampleLine).join(', ')}${sides.map(failedNote).join('')}.<br>
-          부처·수행주체 등 구조 비중은 모든 분야를 같은 기준(최근 5년 관련도 상위 최대 200건)으로 집계합니다. 표본 비율이 다르면(전체 건수가 큰 분야일수록 낮음) 신뢰도가 다를 수 있습니다. 연도별 건수는 전수이며 연차·수행기관 단위로 집계됩니다.<br>
-          정부연구비: 최근 ${INVEST_FUND_SPAN}년 과제가 ${INVEST_CENSUS_MAX.toLocaleString()}건 이하인 분야는 <strong>전수 합산</strong>, 그보다 많은 분야는 연도마다 관련도 순위 전 구간에 고르게 흩어진 최대 100건의 과제당 평균 × 그 해 전체 과제 수로 <strong>추정</strong>합니다. NTIS 검색 결과(연차·수행기관 단위)를 합한 값이라 공식 예산 집계와는 다를 수 있습니다.
+          부처·수행주체 등 구조 비중은 모든 분야를 같은 기준(${recentFrom}~${lastYear}년 관련도 상위 최대 200건)으로 집계합니다. 표본 비율이 다르면(전체 건수가 큰 분야일수록 낮음) 신뢰도가 다를 수 있습니다. 연도별 건수는 전수이며 연차·수행기관 단위로 집계됩니다.<br>
+          정부연구비: 비교 기간(${recentFrom}~${lastYear}년) 과제가 ${INVEST_CENSUS_MAX.toLocaleString()}건 이하인 분야는 <strong>전수 합산</strong>, 그보다 많은 분야는 연도마다 관련도 순위 전 구간에 고르게 흩어진 최대 100건의 과제당 평균 × 그 해 전체 과제 수로 <strong>추정</strong>합니다. NTIS 검색 결과(연차·수행기관 단위)를 합한 값이라 공식 예산 집계와는 다를 수 있습니다.
         </div>
       </div>
     </div>`;
@@ -323,7 +324,7 @@ function drawInvestCmpChart() {
   const title = document.getElementById('investCmpChartTitle');
   const note = document.getElementById('investCmpChartNote');
   if (title) title.textContent = isCount ? '연도별 과제 건수 (분야별 실제 건수)'
-    : isFund ? `연도별 정부연구비 (억원, 최근 ${INVEST_FUND_SPAN}년)` : `과제 건수 성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
+    : isFund ? `연도별 정부연구비 (억원)` : `과제 건수 성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
   if (note) note.textContent = isCount
     ? '분야마다 따로 그려 각자의 추세 모양이 보이도록 했습니다. 세로축 눈금은 분야마다 다르니 규모는 위 카드의 건수로 비교하세요. 진한 막대가 정점 연도입니다.'
     : isFund
@@ -427,9 +428,9 @@ async function generateInvestmentCompareAISummary(seq, sides, cmp) {
   const share = rows => rows.filter(r => !r.isOther).slice(0, 4).map(r => `${r.name} ${Math.round(r.share * 100)}%`).join(', ');
   const brief = side => ({
     키워드: side.query,
-    최근5년과제건수: side.meta.recentTotal,
+    기간내과제건수: side.meta.recentTotal,
     추세: `${side.trend.phase}${side.trend.growth !== null ? ` (${Math.round(side.trend.growth * 100)}%)` : ''}`,
-    최근5년정부연구비추정: investMoneyText(side.funding?.recentTotal ?? null),
+    기간내정부연구비: investMoneyText(side.funding?.recentTotal ?? null),
     과제당평균정부연구비추정: investMoneyText(side.funding?.recentPerProject ?? null, true),
     연구비추세추정: `${side.funding?.phase || '판정 불가'}${side.funding?.growth != null ? ` (${Math.round(side.funding.growth * 100)}%)` : ''}`,
     부처: share(side.agg.byMinistry),

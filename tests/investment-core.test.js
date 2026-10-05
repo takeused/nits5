@@ -64,7 +64,11 @@ test('연도별 건수는 최근 3년 평균과 직전 3년 평균으로 성장 
   assert.equal(Math.round(s.growth * 100), 50);
   assert.equal(s.phase, '급성장');
   assert.equal(s.peakYear, 2022);
-  assert.equal(summarizeYearCounts([2023, 2024], [1, 2]).growth, null);
+  // 6년 미만(비교 분석의 3년 기간)은 마지막 해 vs 첫 해
+  const short = summarizeYearCounts([2023, 2024, 2025], [100, 110, 120]);
+  assert.equal(Math.round(short.growth * 100), 20);
+  assert.equal(short.growthLabel, '2025년, 2023년 대비');
+  assert.equal(summarizeYearCounts([2025], [5]).growth, null);
 });
 
 test('규칙 기반 시사점은 부처 집중·기업 참여 저조·단계 편중을 짚는다', () => {

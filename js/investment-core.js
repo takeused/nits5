@@ -195,24 +195,37 @@
     };
   }
 
-  // 연도별 과제 건수(정확한 전체 건수) 요약. 최근 3년 평균 vs 직전 3년 평균.
+  // 연도별 과제 건수(정확한 전체 건수) 요약. 6년 이상이면 최근 3년 평균 vs 직전 3년 평균,
+  // 그보다 짧으면(비교 분석의 3년 기간) 마지막 해 vs 첫 해로 증감을 본다. growthLabel은 화면 설명용.
   function summarizeYearCounts(years = [], counts = []) {
     // null(조회 실패)은 Number(null)=0이 되지 않도록 먼저 거른다
     const values = counts.map(c => (c !== null && c !== undefined && Number.isFinite(Number(c)) && Number(c) >= 0 ? Number(c) : null));
     const known = values.filter(v => v !== null);
     const sum = arr => arr.reduce((s, v) => s + (v || 0), 0);
-    const recent = values.slice(-3);
-    const prev = values.slice(-6, -3);
-    const okWindow = recent.every(v => v !== null) && prev.length === 3 && prev.every(v => v !== null);
-    const recentAvg = okWindow ? sum(recent) / 3 : null;
-    const prevAvg = okWindow ? sum(prev) / 3 : null;
-    const growth = okWindow && prevAvg > 0 ? (recentAvg - prevAvg) / prevAvg : null;
+    let recentAvg = null, prevAvg = null, growthLabel, growthShort;
+    if (values.length >= 6) {
+      const recent = values.slice(-3);
+      const prev = values.slice(-6, -3);
+      const okWindow = recent.every(v => v !== null) && prev.every(v => v !== null);
+      recentAvg = okWindow ? sum(recent) / 3 : null;
+      prevAvg = okWindow ? sum(prev) / 3 : null;
+      growthLabel = '최근 3년 평균, 직전 3년 대비';
+      growthShort = '최근 3년 증가율';
+    } else {
+      const first = values[0], last = values[values.length - 1];
+      const ok = values.length >= 2 && first !== null && first !== undefined && last !== null && last !== undefined;
+      recentAvg = ok ? last : null;
+      prevAvg = ok ? first : null;
+      growthLabel = `${years[years.length - 1]}년, ${years[0]}년 대비`;
+      growthShort = `${years[0]}→${years[years.length - 1]} 증가율`;
+    }
+    const growth = recentAvg !== null && prevAvg > 0 ? (recentAvg - prevAvg) / prevAvg : null;
     let peakIndex = -1;
     values.forEach((v, i) => { if (v !== null && (peakIndex < 0 || v > values[peakIndex])) peakIndex = i; });
     const phase = growth === null ? '판정 불가'
       : growth > 0.3 ? '급성장' : growth > 0.1 ? '성장' : growth >= -0.1 ? '정체·성숙' : '감소';
     return {
-      years, counts: values, total: sum(known), recentAvg, prevAvg, growth, phase,
+      years, counts: values, total: sum(known), recentAvg, prevAvg, growth, phase, growthLabel, growthShort,
       peakYear: peakIndex >= 0 ? years[peakIndex] : null,
       complete: known.length === values.length,
     };
@@ -221,7 +234,7 @@
   // 연도별 정부연구비 추정. NTIS 검색은 금액 합계를 주지 않으므로, 연도마다 관련도 순위 전 구간에서 고르게 뽑은
   // 표본(최대 30건)의 과제당 평균 정부연구비 × 그 해 전체 과제 건수로 추정한다.
   // samples[i] = i번째 연도 표본 과제들의 정부연구비(원) 배열. 유효 표본이 minSample건 미만인 해는 추정하지 않는다.
-  function summarizeYearFunding(years = [], counts = [], samples = [], { minSample = 3 } = {}) {
+  function summarizeYearFunding(years = [], counts = [], samples = [], { minSample = 3, recentSpan = 5 } = {}) {
     const perProject = years.map((_, i) => {
       const vals = (samples[i] || []).filter(v => Number.isFinite(v) && v >= 0);
       return vals.length >= minSample ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
@@ -238,16 +251,15 @@
       const part = est.slice(from, to);
       return part.length && part.every(v => v !== null) ? part.reduce((a, v) => a + v, 0) : null;
     };
-    const recentSpan = 5;
     const recentTotal = span(-recentSpan);
     const recentCount = counts.slice(-recentSpan).reduce((a, v) => (a === null || v === null || v === undefined ? null : a + Number(v)), 0);
     return {
       years, est, perProject, sampleSizes,
       total: s.complete ? s.total : null,
       recentTotal,
-      // 최근 5년 과제당 평균 = 추정 총액 / 과제 수 (연도별 평균의 단순평균이 아니라 건수 가중)
+      // 최근 recentSpan년 과제당 평균 = 추정 총액 / 과제 수 (연도별 평균의 단순평균이 아니라 건수 가중)
       recentPerProject: recentTotal !== null && recentCount > 0 ? Math.round(recentTotal / recentCount) : null,
-      growth: s.growth, phase: s.phase, peakYear: s.peakYear, complete: s.complete,
+      growth: s.growth, phase: s.phase, growthLabel: s.growthLabel, peakYear: s.peakYear, complete: s.complete,
     };
   }
 
@@ -412,6 +424,7 @@
     };
     const pp = v => `${Math.round(Math.abs(v) * 100)}%p`;
     const listVals = (arr, fmt) => arr.map(fmt).join(' vs ');
+    const gw = list[0].trend?.growthShort || '최근 3년 증가율';   // 비교 기간에 맞는 증가율 표현
 
     // 지표 하나의 격차가 임계값 이상이면 최고·최저 분야를 문장으로 만든다.
     const gapSignal = (arr, threshold, tone, make) => {
@@ -423,17 +436,17 @@
     if (valid(kpis.growth)) {
       const e = extremes(kpis.growth);
       if (e.spread >= 0.2) {
-        out.push({ tone: 'up', text: `성장 속도: ${ga(names[e.hi])} 가장 빠르고 ${ga(names[e.lo])} 가장 느립니다 — 최근 3년 증가율 ${pp(e.spread)} 차이 (${listVals(kpis.growth, pct)}).` });
+        out.push({ tone: 'up', text: `성장 속도: ${ga(names[e.hi])} 가장 빠르고 ${ga(names[e.lo])} 가장 느립니다 — ${gw} ${pp(e.spread)} 차이 (${listVals(kpis.growth, pct)}).` });
       } else {
-        out.push({ tone: 'flat', text: `성장 속도: 최근 3년 증가율 차이가 ${pp(e.spread)}로 비슷한 수준입니다 (${listVals(kpis.growth, pct)}).` });
+        out.push({ tone: 'flat', text: `성장 속도: ${gw} 차이가 ${pp(e.spread)}로 비슷한 수준입니다 (${listVals(kpis.growth, pct)}).` });
       }
     }
     // 연구비: 건수 성장과 연구비 성장이 엇갈리면(건수↑·연구비↓ 등) 과제 대형화/소형화 신호
     if (valid(kpis.fundGrowth)) {
       const e = extremes(kpis.fundGrowth);
       out.push(e.spread >= 0.2
-        ? { tone: 'up', text: `연구비 성장(추정): ${ga(names[e.hi])} 가장 빠르고 ${ga(names[e.lo])} 가장 느립니다 — 최근 3년 증가율 ${pp(e.spread)} 차이 (${listVals(kpis.fundGrowth, pct)}).` }
-        : { tone: 'flat', text: `연구비 성장(추정): 최근 3년 증가율 차이가 ${pp(e.spread)}로 비슷합니다 (${listVals(kpis.fundGrowth, pct)}).` });
+        ? { tone: 'up', text: `연구비 성장(추정): ${ga(names[e.hi])} 가장 빠르고 ${ga(names[e.lo])} 가장 느립니다 — ${gw} ${pp(e.spread)} 차이 (${listVals(kpis.fundGrowth, pct)}).` }
+        : { tone: 'flat', text: `연구비 성장(추정): ${gw} 차이가 ${pp(e.spread)}로 비슷합니다 (${listVals(kpis.fundGrowth, pct)}).` });
       names.forEach((n, i) => {
         const g = kpis.growth[i], f = kpis.fundGrowth[i];
         if (g === null || g === undefined || Math.abs(f - g) < 0.2) return;

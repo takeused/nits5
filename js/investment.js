@@ -76,14 +76,18 @@ const _investCache = new Map();
 const INVEST_CACHE_TTL = 30 * 60 * 1000;
 
 // withFunding: 연구비(전수 또는 표본 추정)도 모은다 — 조회가 많아 비교 분석에서만 켠다.
-async function collectInvestmentData(proxyBase, query, { isStale = () => false, label = '', withFunding = false } = {}) {
-  const cacheKey = query.trim().toLowerCase();
+// spans: { years: 건수 추이 기간, recent: 투자 구조 기간, fund: 연구비 기간 } — 비교 분석은 모두 3년.
+async function collectInvestmentData(proxyBase, query, { isStale = () => false, label = '', withFunding = false, spans = {} } = {}) {
+  const yearSpan = spans.years || INVEST_YEAR_SPAN;
+  const recentSpan = spans.recent || INVEST_RECENT_SPAN;
+  const fundSpan = spans.fund || INVEST_FUND_SPAN;
+  const cacheKey = `${query.trim().toLowerCase()}|${yearSpan}|${recentSpan}|${fundSpan}`;
   const cached = _investCache.get(cacheKey);
   if (cached && Date.now() - cached.at < INVEST_CACHE_TTL && (!withFunding || cached.data.funding)) return cached.data;
 
   const lastYear = new Date().getFullYear() - 1;            // 완결 연도까지만
-  const years = Array.from({ length: INVEST_YEAR_SPAN }, (_, i) => lastYear - INVEST_YEAR_SPAN + 1 + i);
-  const recentFrom = lastYear - INVEST_RECENT_SPAN + 1;
+  const years = Array.from({ length: yearSpan }, (_, i) => lastYear - yearSpan + 1 + i);
+  const recentFrom = lastYear - recentSpan + 1;
 
   // ① 연도별 과제 건수 (정확한 전체 건수)
   let doneYears = 0;
@@ -99,8 +103,8 @@ async function collectInvestmentData(proxyBase, query, { isStale = () => false, 
   // ② 연구비(최근 6년 — 3년 대 3년 증감을 보려고 5년보다 1년 더)
   //    NTIS는 금액 합계를 주지 않고 한 번에 10건만 돌려준다. 그래서 과제가 적으면 전부 받아 정확히 합산(전수)하고,
   //    많으면 연도마다 관련도 순위 전 구간에 고르게 흩어진 페이지로 표본을 뽑아 추정한다.
-  const fundYears = years.slice(-INVEST_FUND_SPAN);
-  const fundCounts = counts.slice(-INVEST_FUND_SPAN);
+  const fundYears = years.slice(-fundSpan);
+  const fundCounts = counts.slice(-fundSpan);
   const fundTotal = fundCounts.every(c => c !== null) ? fundCounts.reduce((s, c) => s + c, 0) : null;
   const census = withFunding && fundTotal !== null && fundTotal <= INVEST_CENSUS_MAX;
   const recordKey = r => `${r.id || r.title}|${r.year}|${r.agency}`;   // 레코드 = 과제×연도×수행기관
@@ -116,7 +120,7 @@ async function collectInvestmentData(proxyBase, query, { isStale = () => false, 
       if (isStale()) return null;
       try { return (await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery, startPosition: start }))).xml; }
       catch { failedPages++; return null; }
-      finally { investSetProgress(label + `연구비 전수 집계 중... ${(++done * NTIS_PAGE_SIZE).toLocaleString()} / ${fundTotal.toLocaleString()}건`); }
+      finally { investSetProgress(label + `연구비 전수 집계 중... ${Math.min(++done * NTIS_PAGE_SIZE, fundTotal).toLocaleString()} / ${fundTotal.toLocaleString()}건`); }
     });
     if (isStale()) return null;
     const seen = new Set();
@@ -161,13 +165,13 @@ async function collectInvestmentData(proxyBase, query, { isStale = () => false, 
     const first = await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery }));
     const pageCount = Math.min(INVEST_SAMPLE_PAGES, Math.ceil(first.totalHits / NTIS_PAGE_SIZE));
     let donePages = 1;
-    investSetProgress(label + `최근 ${INVEST_RECENT_SPAN}년 과제 표본 수집 중... (1/${Math.max(1, pageCount)}페이지)`);
+    investSetProgress(label + `최근 ${recentSpan}년 과제 표본 수집 중... (1/${Math.max(1, pageCount)}페이지)`);
     const rest = Array.from({ length: Math.max(0, pageCount - 1) }, (_, i) => (i + 1) * NTIS_PAGE_SIZE + 1);
     const restXml = await mapWithConcurrency(rest, 2, async (start) => {
       try {
         return (await investNtisFetch(proxyBase, investParams(query, { addQuery: rangeQuery, startPosition: start }))).xml;
       } catch { failedPages++; return null; }
-      finally { investSetProgress(label + `최근 ${INVEST_RECENT_SPAN}년 과제 표본 수집 중... (${++donePages}/${pageCount}페이지)`); }
+      finally { investSetProgress(label + `최근 ${recentSpan}년 과제 표본 수집 중... (${++donePages}/${pageCount}페이지)`); }
     });
     if (isStale()) return null;
     const seen = new Set();
@@ -182,15 +186,15 @@ async function collectInvestmentData(proxyBase, query, { isStale = () => false, 
     }
   }
 
-  const recentTotal = counts.slice(-INVEST_RECENT_SPAN).reduce((s, c) => s + (c || 0), 0);
+  const recentTotal = counts.slice(-recentSpan).reduce((s, c) => s + (c || 0), 0);
   const agg = InvestmentCore.aggregateInvestment(records, { query });
   const trend = InvestmentCore.summarizeYearCounts(years, counts);
   const funding = withFunding ? {
-    ...InvestmentCore.summarizeYearFunding(fundYears, fundCounts, fundSamples, { minSample: census ? 1 : 3 }),
+    ...InvestmentCore.summarizeYearFunding(fundYears, fundCounts, fundSamples, { minSample: census ? 1 : 3, recentSpan: Math.min(recentSpan, fundSpan) }),
     mode: census ? 'census' : 'sample',
   } : null;
   const insights = InvestmentCore.buildInvestmentInsights(agg, trend);
-  const meta = { query, years, recentFrom, lastYear, recentTotal, failedPages, sampleSize: records.length };
+  const meta = { query, years, recentFrom, lastYear, recentSpan, recentTotal, failedPages, sampleSize: records.length };
   const data = { meta, agg, trend, funding, insights };
   // 일부 연도·페이지 조회가 실패한 결과는 캐시하지 않는다(재시도 시 완전한 결과를 받도록).
   if (trend.complete && !failedPages) _investCache.set(cacheKey, { at: Date.now(), data });
