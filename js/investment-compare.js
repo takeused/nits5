@@ -1,5 +1,5 @@
 // ============================================================
-// 정부 R&D 투자 지형 비교 — 키워드 2~3개(3번째는 선택)를 각각 분석(collectInvestmentData)한 뒤 나란히 비교한다.
+// 정부 R&D 투자 지형 비교 — 키워드 2개를 각각 분석(collectInvestmentData)한 뒤 나란히 비교한다.
 // 분야별 요약 카드 → 분야별 작은 막대그래프(각자 실제 건수 눈금) 순으로 보여주고, 성장 속도는 지수(기준연도=100)로 겹쳐 본다.
 // 비교 계산은 InvestmentCore.compareInvestment, 여기는 입력창과 화면.
 // ============================================================
@@ -23,30 +23,28 @@ function openInvestmentCompare() {
   overlay.id = 'investCmpModal';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
   const inputStyle = 'width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box;';
-  const field = (i, value, placeholder, optional) => `
-      <label style="font-size:12px;font-weight:700;color:${INVEST_CMP_COLORS[i]};">키워드 ${INVEST_CMP_LABELS[i]}${optional ? ' <span style="font-weight:500;color:#98a2b3;">(선택)</span>' : ''}</label>
+  const field = (i, value, placeholder) => `
+      <label style="font-size:12px;font-weight:700;color:${INVEST_CMP_COLORS[i]};">키워드 ${INVEST_CMP_LABELS[i]}</label>
       <input id="investCmp${INVEST_CMP_LABELS[i]}" type="text" value="${escAttr(value)}" placeholder="${placeholder}" style="${inputStyle}margin:4px 0 12px;">`;
   overlay.innerHTML = `
     <div role="dialog" aria-modal="true" aria-labelledby="investCmpTitle" style="background:#fff;border-radius:14px;padding:22px 24px;width:100%;max-width:420px;box-shadow:0 20px 50px rgba(0,0,0,0.25);">
       <p id="investCmpTitle" style="font-size:15px;font-weight:800;color:#111;margin:0 0 4px;">R&amp;D 투자 지형 비교</p>
-      <p style="font-size:12px;color:#6b7280;margin:0 0 14px;">기술 키워드 2개(최대 3개)를 입력하면 규모·성장·투자 구조를 나란히 비교합니다. 3번째 키워드는 비워두면 2개만 비교합니다.</p>
-      ${field(0, first, '예: 인공지능', false)}
-      ${field(1, '', '예: 재난안전', false)}
-      ${field(2, '', '예: 인공지능', true)}
+      <p style="font-size:12px;color:#6b7280;margin:0 0 14px;">기술 키워드 2개를 입력하면 규모·성장·투자 구조를 나란히 비교합니다.</p>
+      ${field(0, first, '예: 인공지능')}
+      ${field(1, '', '예: 재난안전')}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
         <button type="button" id="investCmpCancel" class="btn-secondary text-sm">취소</button>
         <button type="button" id="investCmpGo" class="btn-primary text-sm">비교 분석</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  const inputs = INVEST_CMP_LABELS.map(l => overlay.querySelector(`#investCmp${l}`));
+  const inputs = INVEST_CMP_LABELS.slice(0, 2).map(l => overlay.querySelector(`#investCmp${l}`));
   const go = () => {
     const queries = inputs.map(el => el.value.trim());
-    if (!queries[0] || !queries[1]) { showToast('키워드 A와 B는 반드시 입력해주세요', 'warning'); return; }
-    const picked = queries.filter(Boolean);
-    if (new Set(picked.map(x => x.toLowerCase())).size !== picked.length) { showToast('서로 다른 키워드를 입력해주세요', 'warning'); return; }
+    if (!queries[0] || !queries[1]) { showToast('키워드 A와 B를 모두 입력해주세요', 'warning'); return; }
+    if (queries[0].toLowerCase() === queries[1].toLowerCase()) { showToast('서로 다른 키워드를 입력해주세요', 'warning'); return; }
     closeInvestmentCompareModal();
-    runInvestmentCompare(picked);
+    runInvestmentCompare(queries);
   };
   overlay.querySelector('#investCmpGo').onclick = go;
   overlay.querySelector('#investCmpCancel').onclick = closeInvestmentCompareModal;
