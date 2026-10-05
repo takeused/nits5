@@ -5,6 +5,7 @@ const {
   performerGroup,
   aggregateInvestment,
   summarizeYearCounts,
+  summarizeYearFunding,
   buildInvestmentInsights,
   compareInvestment,
   isGenericBusiness,
@@ -155,6 +156,46 @@ test('세 키워드 비교는 지표를 3개씩 담고 최고·최저 분야로 
   const texts = cmp.signals.map(s => s.text).join(' | ');
   assert.match(texts, /성장 속도: "양자"가 가장 빠르고 "재난안전"이 가장 느립니다/);
   assert.match(texts, /주도 부처: "인공지능"은 .*"재난안전"은 .*"양자"는 /);
+});
+
+test('연구비는 연도별 표본 평균 × 전체 건수로 추정하고, 표본이 부족하거나 건수 조회가 실패한 해는 비운다', () => {
+  const ys = [2020, 2021, 2022, 2023, 2024, 2025];
+  const f = summarizeYearFunding(ys, [10, 10, 10, 20, null, 0],
+    [[1e8, 3e8, 2e8], [2e8, 2e8, 2e8], [2e8, 2e8], [4e8, 4e8, 4e8], [1e8, 1e8, 1e8], []]);
+  assert.deepEqual(f.est, [20e8, 20e8, null, 80e8, null, 0]);   // 2022는 표본 2건(<3), 2024는 건수 실패, 0건은 0원
+  assert.equal(f.perProject[0], 2e8);
+  assert.equal(f.sampleSizes[2], 2);
+  assert.equal(f.total, null);                                  // 빈 해가 있으면 총액을 내지 않는다
+  assert.equal(f.recentTotal, null);
+  const ok = summarizeYearFunding(ys, [10, 10, 10, 10, 10, 20], ys.map((_, i) => (i < 3 ? [1e8, 1e8, 1e8] : [2e8, 2e8, 2e8])));
+  assert.equal(ok.total, 30e8 + 20e8 + 20e8 + 40e8);
+  assert.equal(Math.round(ok.growth * 100), 167);               // 직전 3년 평균 10억 → 최근 3년 평균 26.7억
+  assert.equal(ok.phase, '급성장');
+  assert.equal(ok.recentPerProject, Math.round((10e8 + 10e8 + 20e8 + 20e8 + 40e8) / 60));   // 최근 5년, 건수 가중 평균
+});
+
+test('건수 조회 실패(null)는 0건으로 취급하지 않는다', () => {
+  const s = summarizeYearCounts([2023, 2024], [5, null]);
+  assert.deepEqual(s.counts, [5, null]);
+  assert.equal(s.complete, false);
+});
+
+test('비교에 연구비가 있으면 연구비 규모 배수·성장 차이·과제당 규모 신호를 만든다', () => {
+  const withFund = (s, perProject, growthUp) => {
+    const samples = years.map((_, i) => Array(3).fill(perProject * (growthUp && i >= 7 ? 2 : 1)));
+    return { ...s, funding: summarizeYearFunding(years, s.trend.counts, samples) };
+  };
+  const cmp = compareInvestment([withFund(sideA(), 5e8, true), withFund(sideB(), 1e8, false)]);
+  assert.ok(cmp.fundScale.ratio > 8);
+  assert.equal(cmp.fundScale.largest, 0);
+  const texts = cmp.signals.map(s => s.text).join(' | ');
+  assert.match(texts, /연구비 성장\(추정\): "인공지능"이 가장 빠르고/);
+  assert.match(texts, /"인공지능": 연구비 증가율.*대형화/);
+  assert.match(texts, /과제당 규모\(추정\): "인공지능" 과제가 "재난안전"보다/);
+  // 연구비가 없는 옛 데이터도 비교는 된다
+  const plain = compareInvestment([sideA(), sideB()]);
+  assert.equal(plain.fundScale.ratio, null);
+  assert.doesNotMatch(plain.signals.map(s => s.text).join(' '), /연구비/);
 });
 
 test('키워드가 2개 미만이면 비교하지 않는다', () => {

@@ -98,7 +98,7 @@ async function runInvestmentCompare(queries) {
     // NTIS 호출 제한(429)을 피하려고 키워드를 순차로 수집한다. 캐시된 키워드는 즉시 반환된다.
     const sides = [];
     for (let i = 0; i < queries.length; i++) {
-      const data = await collectInvestmentData(proxyBase, queries[i], { isStale, label: `[${INVEST_CMP_LABELS[i]} ${queries[i]}] ` });
+      const data = await collectInvestmentData(proxyBase, queries[i], { isStale, label: `[${INVEST_CMP_LABELS[i]} ${queries[i]}] `, withFunding: true });
       if (!data) return;
       sides.push({ query: queries[i], ...data });
     }
@@ -113,6 +113,14 @@ async function runInvestmentCompare(queries) {
 }
 
 // ── 화면 ──────────────────────────────────────────────────────────
+// 원 단위 금액 → "1,234억원"/"1.2조원". perProject는 과제당 금액이라 소수 첫째 자리 억원으로.
+function investMoneyText(won, perProject = false) {
+  if (won === null || won === undefined || !Number.isFinite(won)) return '—';
+  if (perProject) return `${(won / 1e8).toFixed(1)}억원`;
+  if (won >= 1e12) return `${(won / 1e12).toFixed(1)}조원`;
+  return `${Math.round(won / 1e8).toLocaleString()}억원`;
+}
+
 // 0%인 분야 막대는 숨기므로, 어느 색이 어느 분야인지 패널 머리에 범례를 단다
 function investCmpPairPanel(title, rows, note = '', names = []) {
   const legend = names.map((n, i) => `<span style="color:${INVEST_CMP_COLORS[i]};white-space:nowrap;">● ${escHtml(n)}</span>`).join(' ');
@@ -153,27 +161,50 @@ function renderInvestmentCompare(sides, cmp) {
 
   const fallbackNote = cmp.index.some(ix => ix.baseIndex >= 0 && cmp.years[ix.baseIndex] !== cmp.baseYear)
     ? ' 일부 분야는 해당 연도 건수가 없어 첫 유효 연도를 기준으로 했습니다.' : '';
-  // 분야별 요약 카드 — 그래프보다 먼저 결론(규모·성장 신호)이 보이게 한다
+  if (cmp.fundScale?.ratio) {
+    const big = names[cmp.fundScale.largest], small = names[cmp.fundScale.smallest];
+    scaleText += ` · 최근 5년 정부연구비(추정)는 "${escHtml(big)}"${InvestmentCore.josa(big, '이', '가')} "${escHtml(small)}"의 약 ${cmp.fundScale.ratio.toFixed(1)}배`;
+  }
+
+  // 분야별 요약 카드 — 그래프보다 먼저 결론(과제 수·연구비 성장 신호와 규모)이 보이게 한다
+  const signalLine = (label, phase, growth) => {
+    const tone = INVEST_CMP_PHASE_TONE[phase] || INVEST_CMP_PHASE_TONE['판정 불가'];
+    return `
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;">
+          <span style="font-size:11px;color:#667085;width:62px;flex:none;">${label}</span>
+          <span style="font-size:16px;font-weight:800;color:${tone.color};">${tone.icon} ${escHtml(phase)}</span>
+          <span style="font-size:11.5px;font-weight:700;color:#475467;">${growthText(growth)}</span>
+        </div>`;
+  };
+  const stat = (label, value) => `<div><div style="font-size:10.5px;color:#98a2b3;">${label}</div><div style="font-size:15px;font-weight:800;color:#1d2939;">${value}</div></div>`;
   const summaryCards = sides.map((side, i) => {
-    const t = side.trend;
-    const tone = INVEST_CMP_PHASE_TONE[t.phase] || INVEST_CMP_PHASE_TONE['판정 불가'];
-    const recent3 = t.counts.slice(-3).reduce((s, v) => s + (v || 0), 0);
-    const recentShare = t.total > 0 ? Math.round(recent3 / t.total * 100) : null;
+    const t = side.trend, f = side.funding || {};
+    const est = f.mode === 'census' ? '' : '(추정)';
+    const badge = f.mode === 'census'
+      ? '<span style="font-size:10px;font-weight:700;color:#15803d;background:#dcfce7;border-radius:4px;padding:1px 5px;">연구비 전수</span>'
+      : '<span style="font-size:10px;font-weight:700;color:#b45309;background:#fef3c7;border-radius:4px;padding:1px 5px;">연구비 표본 추정</span>';
     return `
       <div style="background:#fff;border:1px solid #e4e7ec;border-top:4px solid ${INVEST_CMP_COLORS[i]};border-radius:12px;padding:12px 14px;min-width:0;">
-        <div style="font-size:13px;font-weight:800;color:${INVEST_CMP_COLORS[i]};margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escAttr(side.query)}">● ${escHtml(side.query)}</div>
-        <div style="font-size:18px;font-weight:800;color:${tone.color};line-height:1.2;">${tone.icon} ${escHtml(t.phase)}</div>
-        <div style="font-size:11px;color:#667085;margin:2px 0 10px;">최근 3년 평균, 직전 3년 대비 ${growthText(t.growth)}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-          <div><div style="font-size:10.5px;color:#98a2b3;">${cmp.years.length}년 총 과제</div><div style="font-size:15px;font-weight:800;color:#1d2939;">${t.total.toLocaleString()}건</div></div>
-          <div><div style="font-size:10.5px;color:#98a2b3;">최근 3년 비중</div><div style="font-size:15px;font-weight:800;color:#1d2939;">${recentShare === null ? '—' : `${recentShare}%`}</div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px;">
+          <span style="font-size:13px;font-weight:800;color:${INVEST_CMP_COLORS[i]};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escAttr(side.query)}">● ${escHtml(side.query)}</span>
+          ${badge}
         </div>
-        ${t.peakYear ? `<div style="font-size:10.5px;color:#98a2b3;margin-top:6px;">정점 ${t.peakYear}년</div>` : ''}
+        ${signalLine('과제 수', t.phase, t.growth)}
+        ${signalLine(`연구비${est}`, f.phase || '판정 불가', f.growth ?? null)}
+        <div style="font-size:10.5px;color:#98a2b3;margin:2px 0 10px;">최근 3년 평균, 직전 3년 대비</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 6px;">
+          ${stat(`${cmp.years.length}년 총 과제`, `${t.total.toLocaleString()}건`)}
+          ${stat(`최근 5년 정부연구비${est}`, investMoneyText(f.recentTotal))}
+          ${stat('최근 5년 과제당 평균', investMoneyText(f.recentPerProject, true))}
+          ${stat('정점 (과제 / 연구비)', `${t.peakYear || '—'} / ${f.peakYear || '—'}`)}
+        </div>
       </div>`;
   }).join('');
 
   const rows = [
     ['최근 5년 과제 건수', k.recentTotal.map(v => `${v.toLocaleString()}건`)],
+    ['최근 5년 정부연구비', k.fundRecentTotal.map((v, i) => `${investMoneyText(v)}${sides[i].funding?.mode === 'census' ? '' : ' <span style="color:#b45309;font-weight:500;">(추정)</span>'}`)],
+    ['과제당 평균 정부연구비', k.perProject.map((v, i) => `${investMoneyText(v, true)}${sides[i].funding?.mode === 'census' ? '' : ' <span style="color:#b45309;font-weight:500;">(추정)</span>'}`)],
     ['주도 부처', k.topMinistry.map((m, i) => `${escHtml(m || '—')} <span style="color:#98a2b3;">${pctText(k.topMinistryShare[i])}</span>`)],
     ['부처 집중도 (HHI)', k.ministryHHI.map(v => String(v ?? '—'))],
     ['기업 수행 비중', k.companyShare.map(pctText)],
@@ -205,7 +236,7 @@ function renderInvestmentCompare(sides, cmp) {
         <div class="flex items-center gap-3">
           <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="20"></iconify-icon>
           <div>
-            <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 지형 비교 — 과제 건수 ${cmp.years[0]}~${cmp.years[cmp.years.length - 1]} · 투자 구조 ${recentFrom}~${lastYear}</p>
+            <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 지형 비교 — 과제 건수·연구비 ${cmp.years[0]}~${cmp.years[cmp.years.length - 1]} · 투자 구조 ${recentFrom}~${lastYear}</p>
             <p style="font-size:15px;font-weight:700;margin:0">${headerTitle}</p>
           </div>
         </div>
@@ -223,7 +254,8 @@ function renderInvestmentCompare(sides, cmp) {
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px;">
             <div id="investCmpChartTitle" style="font-size:12px;font-weight:700;color:#344054;"></div>
             <div role="group" aria-label="그래프 보기 전환" style="display:inline-flex;border:1px solid #d0d5dd;border-radius:8px;overflow:hidden;">
-              <button type="button" id="investCmpViewCount" onclick="setInvestCmpView('count')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;cursor:pointer;">분야별 건수</button>
+              <button type="button" id="investCmpViewCount" onclick="setInvestCmpView('count')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;cursor:pointer;">과제 건수</button>
+              <button type="button" id="investCmpViewFund" onclick="setInvestCmpView('fund')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;border-left:1px solid #d0d5dd;cursor:pointer;">연구비</button>
               <button type="button" id="investCmpViewIndex" onclick="setInvestCmpView('index')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;border-left:1px solid #d0d5dd;cursor:pointer;">성장 지수</button>
             </div>
           </div>
@@ -254,8 +286,9 @@ function renderInvestmentCompare(sides, cmp) {
         </div>
 
         <div style="font-size:11px;color:#98a2b3;line-height:1.7;">
-          표본 기준: ${recentFrom}~${lastYear}년 과제 중 검색 관련도 상위 최대 200건의 정부연구비 비중 — ${sides.map(sampleLine).join(', ')}${sides.map(failedNote).join('')}.<br>
-          표본 비율이 다르면(전체 건수가 큰 분야일수록 표본 비율이 낮음) 구조 비중의 신뢰도가 다를 수 있습니다. 연도별 건수는 전수(표본 아님)이며 연차·수행기관 단위로 집계됩니다.
+          투자 구조 기준: ${recentFrom}~${lastYear}년 과제의 정부연구비 비중 — ${sides.map(sampleLine).join(', ')}${sides.map(failedNote).join('')}.<br>
+          부처·수행주체 등 구조 비중은 모든 분야를 같은 기준(최근 5년 관련도 상위 최대 200건)으로 집계합니다. 표본 비율이 다르면(전체 건수가 큰 분야일수록 낮음) 신뢰도가 다를 수 있습니다. 연도별 건수는 전수이며 연차·수행기관 단위로 집계됩니다.<br>
+          정부연구비: 최근 ${INVEST_FUND_SPAN}년 과제가 ${INVEST_CENSUS_MAX.toLocaleString()}건 이하인 분야는 <strong>전수 합산</strong>, 그보다 많은 분야는 연도마다 관련도 순위 전 구간에 고르게 흩어진 최대 100건의 과제당 평균 × 그 해 전체 과제 수로 <strong>추정</strong>합니다. NTIS 검색 결과(연차·수행기관 단위)를 합한 값이라 공식 예산 집계와는 다를 수 있습니다.
         </div>
       </div>
     </div>`;
@@ -265,12 +298,13 @@ function renderInvestmentCompare(sides, cmp) {
   requestAnimationFrame(drawInvestCmpChart);
 }
 
-// 그래프 보기 전환: 'count'(분야별 작은 막대그래프, 각자 실제 건수 눈금) / 'index'(성장 지수 — 한 그래프에 겹쳐 성장 속도 비교)
+// 그래프 보기 전환: 'count'(분야별 작은 막대그래프, 각자 실제 건수 눈금) / 'fund'(같은 형식, 연구비 추정)
+// / 'index'(과제 건수 성장 지수 — 한 그래프에 겹쳐 성장 속도 비교)
 let _investCmpView = 'count';
 let _investCmpData = null;
 
 function setInvestCmpView(view) {
-  _investCmpView = view === 'index' ? 'index' : 'count';
+  _investCmpView = ['count', 'fund', 'index'].includes(view) ? view : 'count';
   drawInvestCmpChart();
 }
 
@@ -278,17 +312,22 @@ function drawInvestCmpChart() {
   if (!_investCmpData || typeof Chart === 'undefined') return;
   const { sides, cmp, fallbackNote } = _investCmpData;
   const isCount = _investCmpView === 'count';
+  const isFund = _investCmpView === 'fund';
 
   // 전환 버튼·제목·설명 갱신
   const on = 'background:#344054;color:#fff;', off = 'background:#fff;color:#475467;';
-  const setBtn = (id, active) => { const el = document.getElementById(id); if (el) el.style.cssText = `padding:5px 12px;font-size:11.5px;font-weight:700;border:0;cursor:pointer;${id.endsWith('Index') ? 'border-left:1px solid #d0d5dd;' : ''}${active ? on : off}`; };
+  const setBtn = (id, active) => { const el = document.getElementById(id); if (el) el.style.cssText = `padding:5px 12px;font-size:11.5px;font-weight:700;border:0;cursor:pointer;${id.endsWith('Count') ? '' : 'border-left:1px solid #d0d5dd;'}${active ? on : off}`; };
   setBtn('investCmpViewCount', isCount);
-  setBtn('investCmpViewIndex', !isCount);
+  setBtn('investCmpViewFund', isFund);
+  setBtn('investCmpViewIndex', !isCount && !isFund);
   const title = document.getElementById('investCmpChartTitle');
   const note = document.getElementById('investCmpChartNote');
-  if (title) title.textContent = isCount ? '연도별 과제 건수 (분야별 실제 건수)' : `성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
+  if (title) title.textContent = isCount ? '연도별 과제 건수 (분야별 실제 건수)'
+    : isFund ? `연도별 정부연구비 (억원, 최근 ${INVEST_FUND_SPAN}년)` : `과제 건수 성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
   if (note) note.textContent = isCount
     ? '분야마다 따로 그려 각자의 추세 모양이 보이도록 했습니다. 세로축 눈금은 분야마다 다르니 규모는 위 카드의 건수로 비교하세요. 진한 막대가 정점 연도입니다.'
+    : isFund
+    ? `분야별 이름 옆에 "전수"(모든 과제 금액 합산) 또는 "추정"(연도별 표본 최대 100건의 과제당 평균 × 전체 과제 수)을 표시했습니다. 추정 분야는 큰 과제 몇 건에 따라 해마다 출렁일 수 있으니 추세 위주로 보세요. 막대에 마우스를 올리면 계산 근거가 나옵니다.`
     : `규모가 아니라 ${cmp.baseYear}년 대비 증가 배수입니다(100 초과 = ${cmp.baseYear}년보다 증가). 건수가 많은 분야가 아래에 있을 수 있습니다. 실제 건수는 마우스를 올리면 표시됩니다.${fallbackNote}`;
 
   const area = document.getElementById('investCmpChartArea');
@@ -299,12 +338,28 @@ function drawInvestCmpChart() {
   const rawText = raw => (raw === null || raw === undefined ? '조회 실패' : `${Number(raw).toLocaleString()}건`);
   const grid = { color: 'rgba(52,64,84,0.08)' };
 
-  if (isCount) {
-    // 분야별 작은 막대그래프 — 각자 실제 건수 눈금, 정점 연도는 진하게
+  if (isCount || isFund) {
+    // 분야별 작은 막대그래프 — 각자 실제 눈금(건수 또는 억원), 정점 연도는 진하게
+    const series = side => (isFund
+      ? (side.funding?.est || []).map(v => (Number.isFinite(v) ? Math.round(v / 1e8) : null))
+      : side.trend.counts.map(v => (Number.isFinite(v) ? v : null)));
+    const peakOf = side => String(isFund ? side.funding?.peakYear : side.trend.peakYear);
+    const tip = (side, idx, v) => {
+      if (!isFund) return rawText(v);
+      if (v === null) return '추정 불가 (조회 실패 또는 표본 부족)';
+      const f = side.funding;
+      const count = side.trend.counts[side.trend.years.indexOf(f.years[idx])];
+      return f.mode === 'census'
+        ? `${v.toLocaleString()}억원 (전수 ${rawText(count)} 합계, 과제당 평균 ${investMoneyText(f.perProject[idx], true)})`
+        : `약 ${v.toLocaleString()}억원 (표본 ${f.sampleSizes[idx]}건 평균 ${investMoneyText(f.perProject[idx], true)} × ${rawText(count)})`;
+    };
+    const labelsOf = side => (isFund ? (side.funding?.years || []).map(String) : labels);
+    const modeTag = side => (!isFund ? '' : side.funding?.mode === 'census'
+      ? ' <span style="font-size:10px;color:#15803d;">전수</span>' : ' <span style="font-size:10px;color:#b45309;">추정</span>');
     area.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">
       ${sides.map((side, i) => `
         <div style="min-width:0;">
-          <div style="font-size:12px;font-weight:700;color:${INVEST_CMP_COLORS[i]};margin-bottom:4px;">● ${escHtml(side.query)}</div>
+          <div style="font-size:12px;font-weight:700;color:${INVEST_CMP_COLORS[i]};margin-bottom:4px;">● ${escHtml(side.query)}${modeTag(side)}</div>
           <div style="position:relative;height:200px;"><canvas id="investCmpChart${i}"></canvas></div>
         </div>`).join('')}
     </div>`;
@@ -312,21 +367,23 @@ function drawInvestCmpChart() {
       const canvas = document.getElementById(`investCmpChart${i}`);
       if (!canvas) return;
       const color = INVEST_CMP_COLORS[i];
-      const peak = String(side.trend.peakYear);
+      const peak = peakOf(side);
+      const xLabels = labelsOf(side);
       window._investCmpChartInstances.push(new Chart(canvas, {
         type: 'bar',
-        data: { labels, datasets: [{
+        data: { labels: xLabels, datasets: [{
           label: side.query,
-          data: side.trend.counts.map(v => (Number.isFinite(v) ? v : null)),
-          backgroundColor: labels.map(y => (y === peak ? color : `${color}8C`)),
+          data: series(side),
+          backgroundColor: xLabels.map(y => (y === peak ? color : `${color}8C`)),
           borderRadius: 3, maxBarThickness: 32,
         }] },
         options: {
           responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${rawText(c.raw)}` } } },
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${tip(side, c.dataIndex, c.raw)}` } } },
           scales: {
             x: { grid: { display: false }, ticks: { color: '#667085', maxRotation: 0, autoSkip: true, autoSkipPadding: 6 } },
-            y: { beginAtZero: true, grid, ticks: { color: '#667085', callback: v => Number(v).toLocaleString() } },
+            y: { beginAtZero: true, grid, ticks: { color: '#667085', callback: v => Number(v).toLocaleString() },
+              title: { display: isFund, text: '억원', color: '#98a2b3', font: { size: 10 } } },
           },
         },
       }));
@@ -372,6 +429,9 @@ async function generateInvestmentCompareAISummary(seq, sides, cmp) {
     키워드: side.query,
     최근5년과제건수: side.meta.recentTotal,
     추세: `${side.trend.phase}${side.trend.growth !== null ? ` (${Math.round(side.trend.growth * 100)}%)` : ''}`,
+    최근5년정부연구비추정: investMoneyText(side.funding?.recentTotal ?? null),
+    과제당평균정부연구비추정: investMoneyText(side.funding?.recentPerProject ?? null, true),
+    연구비추세추정: `${side.funding?.phase || '판정 불가'}${side.funding?.growth != null ? ` (${Math.round(side.funding.growth * 100)}%)` : ''}`,
     부처: share(side.agg.byMinistry),
     수행주체: share(side.agg.byPerformer),
     연구단계: share(side.agg.byPhase),
@@ -386,7 +446,7 @@ async function generateInvestmentCompareAISummary(seq, sides, cmp) {
       model: getActiveCerebrasModel(),
       messages: [
         { role: 'system', content: '당신은 한국 국가R&D 정책 기획 전문가입니다. 주어진 수치만 근거로 쓰고, 수치에 없는 사실은 추측하지 않습니다. 한국어로 답합니다.' },
-        { role: 'user', content: `아래는 ${sides.length}개 기술 분야(${quoted})의 NTIS 국가R&D 과제 집계입니다.\n${JSON.stringify(facts)}\n\nR&D 정책 수립·신규사업 기획 담당자에게 분야들을 상대 비교한 시사점 4개를 작성하세요. 규모·성장 차이, 투자 구조(부처·수행주체·단계·지역) 차이, 한 분야의 사례를 다른 분야에 적용할 기회나 융합 여지, 추가로 확인할 점을 다루세요. 각 항목은 "- "로 시작하는 1~2문장이며 근거 수치를 괄호로 인용하세요. 목록 외 다른 문장은 쓰지 마세요.` },
+        { role: 'user', content: `아래는 ${sides.length}개 기술 분야(${quoted})의 NTIS 국가R&D 과제 집계입니다.\n${JSON.stringify(facts)}\n\nR&D 정책 수립·신규사업 기획 담당자에게 분야들을 상대 비교한 시사점 4개를 작성하세요. 과제 수·연구비(표본 기반 추정치임을 밝힐 것) 규모와 성장 차이, 과제당 규모, 투자 구조(부처·수행주체·단계·지역) 차이, 한 분야의 사례를 다른 분야에 적용할 기회나 융합 여지, 추가로 확인할 점을 다루세요. 각 항목은 "- "로 시작하는 1~2문장이며 근거 수치를 괄호로 인용하세요. 목록 외 다른 문장은 쓰지 마세요.` },
       ],
       temperature: 0.3,
       reasoning_effort: 'low',

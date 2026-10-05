@@ -197,7 +197,8 @@
 
   // 연도별 과제 건수(정확한 전체 건수) 요약. 최근 3년 평균 vs 직전 3년 평균.
   function summarizeYearCounts(years = [], counts = []) {
-    const values = counts.map(c => (Number.isFinite(Number(c)) && Number(c) >= 0 ? Number(c) : null));
+    // null(조회 실패)은 Number(null)=0이 되지 않도록 먼저 거른다
+    const values = counts.map(c => (c !== null && c !== undefined && Number.isFinite(Number(c)) && Number(c) >= 0 ? Number(c) : null));
     const known = values.filter(v => v !== null);
     const sum = arr => arr.reduce((s, v) => s + (v || 0), 0);
     const recent = values.slice(-3);
@@ -214,6 +215,39 @@
       years, counts: values, total: sum(known), recentAvg, prevAvg, growth, phase,
       peakYear: peakIndex >= 0 ? years[peakIndex] : null,
       complete: known.length === values.length,
+    };
+  }
+
+  // 연도별 정부연구비 추정. NTIS 검색은 금액 합계를 주지 않으므로, 연도마다 관련도 순위 전 구간에서 고르게 뽑은
+  // 표본(최대 30건)의 과제당 평균 정부연구비 × 그 해 전체 과제 건수로 추정한다.
+  // samples[i] = i번째 연도 표본 과제들의 정부연구비(원) 배열. 유효 표본이 minSample건 미만인 해는 추정하지 않는다.
+  function summarizeYearFunding(years = [], counts = [], samples = [], { minSample = 3 } = {}) {
+    const perProject = years.map((_, i) => {
+      const vals = (samples[i] || []).filter(v => Number.isFinite(v) && v >= 0);
+      return vals.length >= minSample ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+    });
+    const sampleSizes = years.map((_, i) => (samples[i] || []).filter(v => Number.isFinite(v) && v >= 0).length);
+    const est = years.map((_, i) => {
+      const c = counts[i];
+      if (c === null || c === undefined || !Number.isFinite(Number(c))) return null;
+      if (Number(c) === 0) return 0;
+      return perProject[i] === null ? null : Math.round(perProject[i] * Number(c));
+    });
+    const s = summarizeYearCounts(years, est);
+    const span = (from, to) => {
+      const part = est.slice(from, to);
+      return part.length && part.every(v => v !== null) ? part.reduce((a, v) => a + v, 0) : null;
+    };
+    const recentSpan = 5;
+    const recentTotal = span(-recentSpan);
+    const recentCount = counts.slice(-recentSpan).reduce((a, v) => (a === null || v === null || v === undefined ? null : a + Number(v)), 0);
+    return {
+      years, est, perProject, sampleSizes,
+      total: s.complete ? s.total : null,
+      recentTotal,
+      // 최근 5년 과제당 평균 = 추정 총액 / 과제 수 (연도별 평균의 단순평균이 아니라 건수 가중)
+      recentPerProject: recentTotal !== null && recentCount > 0 ? Math.round(recentTotal / recentCount) : null,
+      growth: s.growth, phase: s.phase, peakYear: s.peakYear, complete: s.complete,
     };
   }
 
@@ -327,14 +361,25 @@
       universityShare: pick(s => s.agg.universityShare),
       privateRatio: pick(s => s.agg.privateRatio),
       capitalShare: pick(s => s.agg.capitalShare),
+      // 정부연구비 추정(연도별 표본 기반) — 수집되지 않은 경우 null
+      fundRecentTotal: pick(s => s.funding?.recentTotal ?? null),
+      fundGrowth: pick(s => s.funding?.growth ?? null),
+      fundPhase: pick(s => s.funding?.phase ?? '판정 불가'),
+      perProject: pick(s => s.funding?.recentPerProject ?? null),
     };
+    const funds = kpis.fundRecentTotal;
+    const fundScale = { ratio: null, largest: null, smallest: null };
+    if (funds.every(v => v !== null && v > 0)) {
+      const hi = funds.indexOf(Math.max(...funds)), lo = funds.indexOf(Math.min(...funds));
+      if (hi !== lo) Object.assign(fundScale, { ratio: funds[hi] / funds[lo], largest: hi, smallest: lo });
+    }
     const years = list[0].trend.years;
     const baseYear = list[0].meta.recentFrom;                  // 최근 구간 시작 연도를 공통 기준(=100)으로
     const baseIdx = years.indexOf(baseYear);
     const top = list.length >= 3 ? 6 : 8;
     const dims = COMPARE_DIMENSIONS.map(([key, title]) => ({ key, title, rows: alignShares(list.map(s => s.agg[key]), top) }));
     return {
-      scale, kpis, dims,
+      scale, fundScale, kpis, dims,
       queries: list.map(s => s.query),
       years,
       baseYear,
@@ -383,6 +428,28 @@
         out.push({ tone: 'flat', text: `성장 속도: 최근 3년 증가율 차이가 ${pp(e.spread)}로 비슷한 수준입니다 (${listVals(kpis.growth, pct)}).` });
       }
     }
+    // 연구비: 건수 성장과 연구비 성장이 엇갈리면(건수↑·연구비↓ 등) 과제 대형화/소형화 신호
+    if (valid(kpis.fundGrowth)) {
+      const e = extremes(kpis.fundGrowth);
+      out.push(e.spread >= 0.2
+        ? { tone: 'up', text: `연구비 성장(추정): ${ga(names[e.hi])} 가장 빠르고 ${ga(names[e.lo])} 가장 느립니다 — 최근 3년 증가율 ${pp(e.spread)} 차이 (${listVals(kpis.fundGrowth, pct)}).` }
+        : { tone: 'flat', text: `연구비 성장(추정): 최근 3년 증가율 차이가 ${pp(e.spread)}로 비슷합니다 (${listVals(kpis.fundGrowth, pct)}).` });
+      names.forEach((n, i) => {
+        const g = kpis.growth[i], f = kpis.fundGrowth[i];
+        if (g === null || g === undefined || Math.abs(f - g) < 0.2) return;
+        out.push(f > g
+          ? { tone: 'info', text: `${q(n)}: 연구비 증가율(${pct(f)})이 과제 수 증가율(${pct(g)})보다 높아 과제당 규모가 커지고 있습니다(대형화).` }
+          : { tone: 'warn', text: `${q(n)}: 과제 수 증가율(${pct(g)})에 비해 연구비 증가율(${pct(f)})이 낮아 과제당 규모가 작아지고 있습니다(소형·분산화).` });
+      });
+    }
+    if (valid(kpis.perProject) && kpis.perProject.every(v => v > 0)) {
+      const e = extremes(kpis.perProject);
+      const ratio = kpis.perProject[e.hi] / kpis.perProject[e.lo];
+      if (ratio >= 1.5) {
+        const eok = v => `${(v / 1e8).toFixed(1)}억`;
+        out.push({ tone: 'info', text: `과제당 규모(추정): ${q(names[e.hi])} 과제가 ${q(names[e.lo])}보다 평균 ${ratio.toFixed(1)}배 큽니다 (${listVals(kpis.perProject, eok)}). 신규사업 과제 단가 설정의 참고치입니다.` });
+      }
+    }
     gapSignal(kpis.companyShare, 0.15, 'info', e => `기업 참여: ${ga(names[e.hi])} 가장 높고 ${ga(names[e.lo])} 가장 낮습니다 (${listVals(kpis.companyShare, pct)}). 낮은 쪽은 실증·사업화형 사업 공백 가능성을 점검하세요.`);
     gapSignal(kpis.universityShare, 0.15, 'info', e => `대학 수행: ${ga(names[e.hi])} 가장 높고 ${ga(names[e.lo])} 가장 낮습니다 (${listVals(kpis.universityShare, pct)}).`);
 
@@ -419,6 +486,7 @@
     groupBy,
     aggregateInvestment,
     summarizeYearCounts,
+    summarizeYearFunding,
     buildInvestmentInsights,
   };
 });
