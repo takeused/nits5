@@ -1,6 +1,6 @@
 // ============================================================
 // 정부 R&D 투자 지형 비교 — 키워드 2개를 각각 분석(collectInvestmentData)한 뒤 나란히 비교한다.
-// 분야별 요약 카드 → 분야별 작은 막대그래프(각자 실제 건수 눈금) 순으로 보여주고, 성장 속도는 지수(기준연도=100)로 겹쳐 본다.
+// 분야별 요약 카드 → A 꺾은선·B 막대 복합 그래프(축 2개, 건수/연구비) 순으로 보여주고, 성장 속도는 지수(기준연도=100)로 겹쳐 본다.
 // 비교 계산은 InvestmentCore.compareInvestment, 여기는 입력창과 화면.
 // ============================================================
 
@@ -299,8 +299,8 @@ function renderInvestmentCompare(sides, cmp) {
   requestAnimationFrame(drawInvestCmpChart);
 }
 
-// 그래프 보기 전환: 'count'(분야별 작은 막대그래프, 각자 실제 건수 눈금) / 'fund'(같은 형식, 연구비 추정)
-// / 'index'(과제 건수 성장 지수 — 한 그래프에 겹쳐 성장 속도 비교)
+// 그래프 보기 전환: 'count'(A 꺾은선 + B 막대, 축 2개) / 'fund'(같은 형식, 정부연구비)
+// / 'index'(과제 건수 성장 지수 — 한 축에 겹쳐 성장 속도 비교)
 let _investCmpView = 'count';
 let _investCmpData = null;
 
@@ -323,12 +323,13 @@ function drawInvestCmpChart() {
   setBtn('investCmpViewIndex', !isCount && !isFund);
   const title = document.getElementById('investCmpChartTitle');
   const note = document.getElementById('investCmpChartNote');
-  if (title) title.textContent = isCount ? '연도별 과제 건수 (분야별 실제 건수)'
-    : isFund ? `연도별 정부연구비 (억원)` : `과제 건수 성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
+  const [nameA, nameB] = sides.map(s => s.query);
+  const axisNote = `선(${nameA})은 왼쪽 축, 막대(${nameB})는 오른쪽 축입니다. 두 축의 눈금이 달라 선과 막대의 높이를 서로 비교하면 안 됩니다 — 각자의 추세를 보고, 규모는 위 카드 숫자로 비교하세요.`;
+  if (title) title.textContent = isCount ? '연도별 과제 건수' : isFund ? '연도별 정부연구비 (억원)' : `과제 건수 성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
   if (note) note.textContent = isCount
-    ? '분야마다 따로 그려 각자의 추세 모양이 보이도록 했습니다. 세로축 눈금은 분야마다 다르니 규모는 위 카드의 건수로 비교하세요. 진한 막대가 정점 연도입니다.'
+    ? `${axisNote} 진한 막대가 정점 연도입니다.`
     : isFund
-    ? `분야별 이름 옆에 "전수"(모든 과제 금액 합산) 또는 "추정"(연도별 표본 최대 100건의 과제당 평균 × 전체 과제 수)을 표시했습니다. 추정 분야는 큰 과제 몇 건에 따라 해마다 출렁일 수 있으니 추세 위주로 보세요. 막대에 마우스를 올리면 계산 근거가 나옵니다.`
+    ? `${axisNote} 범례의 "전수"는 모든 과제 금액 합산, "추정"은 연도별 표본 최대 100건의 과제당 평균 × 전체 과제 수입니다. 마우스를 올리면 계산 근거가 나옵니다.`
     : `규모가 아니라 ${cmp.baseYear}년 대비 증가 배수입니다(100 초과 = ${cmp.baseYear}년보다 증가). 건수가 많은 분야가 아래에 있을 수 있습니다. 실제 건수는 마우스를 올리면 표시됩니다.${fallbackNote}`;
 
   const area = document.getElementById('investCmpChartArea');
@@ -340,55 +341,66 @@ function drawInvestCmpChart() {
   const grid = { color: 'rgba(52,64,84,0.08)' };
 
   if (isCount || isFund) {
-    // 분야별 작은 막대그래프 — 각자 실제 눈금(건수 또는 억원), 정점 연도는 진하게
-    const series = side => (isFund
-      ? (side.funding?.est || []).map(v => (Number.isFinite(v) ? Math.round(v / 1e8) : null))
-      : side.trend.counts.map(v => (Number.isFinite(v) ? v : null)));
-    const peakOf = side => String(isFund ? side.funding?.peakYear : side.trend.peakYear);
-    const tip = (side, idx, v) => {
+    // 한 그래프에 A는 꺾은선(왼쪽 축), B는 막대(오른쪽 축) — 축을 따로 둬서 규모가 달라도 둘 다 추세 모양이 보인다.
+    const valueAt = (side, year) => {
+      if (!isFund) {
+        const v = side.trend.counts[side.trend.years.indexOf(year)];
+        return Number.isFinite(v) ? v : null;
+      }
+      const f = side.funding;
+      const idx = f ? f.years.indexOf(year) : -1;
+      return idx >= 0 && Number.isFinite(f.est[idx]) ? Math.round(f.est[idx] / 1e8) : null;
+    };
+    const tip = (side, year, v) => {
       if (!isFund) return rawText(v);
       if (v === null) return '추정 불가 (조회 실패 또는 표본 부족)';
       const f = side.funding;
-      const count = side.trend.counts[side.trend.years.indexOf(f.years[idx])];
+      const idx = f.years.indexOf(year);
+      const count = side.trend.counts[side.trend.years.indexOf(year)];
       return f.mode === 'census'
         ? `${v.toLocaleString()}억원 (전수 ${rawText(count)} 합계, 과제당 평균 ${investMoneyText(f.perProject[idx], true)})`
         : `약 ${v.toLocaleString()}억원 (표본 ${f.sampleSizes[idx]}건 평균 ${investMoneyText(f.perProject[idx], true)} × ${rawText(count)})`;
     };
-    const labelsOf = side => (isFund ? (side.funding?.years || []).map(String) : labels);
-    const modeTag = side => (!isFund ? '' : side.funding?.mode === 'census'
-      ? ' <span style="font-size:10px;color:#15803d;">전수</span>' : ' <span style="font-size:10px;color:#b45309;">추정</span>');
-    area.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">
-      ${sides.map((side, i) => `
-        <div style="min-width:0;">
-          <div style="font-size:12px;font-weight:700;color:${INVEST_CMP_COLORS[i]};margin-bottom:4px;">● ${escHtml(side.query)}${modeTag(side)}</div>
-          <div style="position:relative;height:200px;"><canvas id="investCmpChart${i}"></canvas></div>
-        </div>`).join('')}
-    </div>`;
-    sides.forEach((side, i) => {
-      const canvas = document.getElementById(`investCmpChart${i}`);
-      if (!canvas) return;
-      const color = INVEST_CMP_COLORS[i];
-      const peak = peakOf(side);
-      const xLabels = labelsOf(side);
-      window._investCmpChartInstances.push(new Chart(canvas, {
-        type: 'bar',
-        data: { labels: xLabels, datasets: [{
-          label: side.query,
-          data: series(side),
-          backgroundColor: xLabels.map(y => (y === peak ? color : `${color}8C`)),
-          borderRadius: 3, maxBarThickness: 32,
-        }] },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${tip(side, c.dataIndex, c.raw)}` } } },
-          scales: {
-            x: { grid: { display: false }, ticks: { color: '#667085', maxRotation: 0, autoSkip: true, autoSkipPadding: 6 } },
-            y: { beginAtZero: true, grid, ticks: { color: '#667085', callback: v => Number(v).toLocaleString() },
-              title: { display: isFund, text: '억원', color: '#98a2b3', font: { size: 10 } } },
-          },
-        },
-      }));
+    const modeText = side => (!isFund ? '' : side.funding?.mode === 'census' ? ' (전수)' : ' (추정)');
+    const unit = isFund ? '억원' : '건';
+    const years = cmp.years;
+    const [a, b] = sides;
+    const peakB = String(isFund ? b.funding?.peakYear : b.trend.peakYear);
+    const colorA = INVEST_CMP_COLORS[0], colorB = INVEST_CMP_COLORS[1];
+    area.innerHTML = '<div style="position:relative;height:280px;"><canvas id="investCmpChartCombo"></canvas></div>';
+    const axis = (color, position, side) => ({
+      position, beginAtZero: true,
+      grid: position === 'left' ? grid : { display: false },
+      ticks: { color, callback: v => Number(v).toLocaleString() },
+      title: { display: true, text: `${side.query} (${unit})`, color, font: { size: 11, weight: '700' } },
     });
+    window._investCmpChartInstances.push(new Chart(document.getElementById('investCmpChartCombo'), {
+      data: {
+        labels: years.map(String),
+        datasets: [
+          { type: 'line', label: `${a.query}${modeText(a)}`, side: a, yAxisID: 'yA', order: 0,
+            data: years.map(y => valueAt(a, y)),
+            borderColor: colorA, backgroundColor: colorA, borderWidth: 3, pointRadius: 5, pointHoverRadius: 7, tension: 0.3 },
+          { type: 'bar', label: `${b.query}${modeText(b)}`, side: b, yAxisID: 'yB', order: 1,
+            data: years.map(y => valueAt(b, y)),
+            backgroundColor: years.map(y => (String(y) === peakB ? colorB : `${colorB}A6`)),
+            borderRadius: 4, maxBarThickness: 56 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', align: 'end', labels: { usePointStyle: true, color: '#475467' } },
+          tooltip: { callbacks: { label: c => `${c.dataset.label}: ${tip(c.dataset.side, years[c.dataIndex], c.raw)}` } },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#667085' } },
+          yA: axis(colorA, 'left', a),
+          yB: axis(colorB, 'right', b),
+        },
+      },
+    }));
     return;
   }
 
