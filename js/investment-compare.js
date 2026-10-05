@@ -1,10 +1,17 @@
 // ============================================================
 // 정부 R&D 투자 지형 비교 — 키워드 2~3개(3번째는 선택)를 각각 분석(collectInvestmentData)한 뒤 나란히 비교한다.
-// 규모가 크게 다른 분야도 보이도록 절대 건수 대신 지수(첫 해=100)와 비중으로 맞춘다.
+// 분야별 요약 카드 → 분야별 작은 막대그래프(각자 실제 건수 눈금) 순으로 보여주고, 성장 속도는 지수(기준연도=100)로 겹쳐 본다.
 // 비교 계산은 InvestmentCore.compareInvestment, 여기는 입력창과 화면.
 // ============================================================
 
 const INVEST_CMP_COLORS = ['#2563eb', '#ea580c', '#16a34a'];
+const INVEST_CMP_PHASE_TONE = {
+  '급성장': { icon: '⬆', color: '#15803d' },
+  '성장': { icon: '↗', color: '#16a34a' },
+  '정체·성숙': { icon: '→', color: '#475467' },
+  '감소': { icon: '↘', color: '#dc2626' },
+  '판정 불가': { icon: '—', color: '#98a2b3' },
+};
 const INVEST_CMP_HEADER_COLORS = ['#93c5fd', '#fdba74', '#86efac'];   // 어두운 헤더 위에서 읽히는 밝은 톤
 const INVEST_CMP_LABELS = ['A', 'B', 'C'];
 let _investCmpSeq = 0;
@@ -108,7 +115,9 @@ async function runInvestmentCompare(queries) {
 }
 
 // ── 화면 ──────────────────────────────────────────────────────────
-function investCmpPairPanel(title, rows, note = '') {
+// 0%인 분야 막대는 숨기므로, 어느 색이 어느 분야인지 패널 머리에 범례를 단다
+function investCmpPairPanel(title, rows, note = '', names = []) {
+  const legend = names.map((n, i) => `<span style="color:${INVEST_CMP_COLORS[i]};white-space:nowrap;">● ${escHtml(n)}</span>`).join(' ');
   const visible = rows.filter(r => r.values.some(v => Math.round(v * 100) > 0));
   const bar = (v, color) => `
     <span style="display:grid;grid-template-columns:minmax(0,1fr) 34px;gap:6px;align-items:center;">
@@ -118,11 +127,14 @@ function investCmpPairPanel(title, rows, note = '') {
   const body = visible.length ? visible.map(r => `
     <div style="margin-bottom:9px;">
       <div style="font-size:12px;color:#1d2939;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escAttr(r.name)}">${escHtml(r.name)}</div>
-      ${r.values.map((v, i) => bar(v, INVEST_CMP_COLORS[i])).join('')}
+      ${r.values.map((v, i) => (Math.round(v * 100) > 0 ? bar(v, INVEST_CMP_COLORS[i]) : '')).join('')}
     </div>`).join('') : '<div style="font-size:12px;color:#98a2b3;">데이터 없음</div>';
   return `
     <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;min-width:0;">
-      <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:10px;">${title}</div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <span style="font-size:12px;font-weight:700;color:#344054;">${title}</span>
+        <span style="font-size:10.5px;font-weight:600;">${legend}</span>
+      </div>
       ${body}
       ${note ? `<div style="font-size:10.5px;color:#98a2b3;margin-top:4px;">${note}</div>` : ''}
     </div>`;
@@ -143,9 +155,27 @@ function renderInvestmentCompare(sides, cmp) {
 
   const fallbackNote = cmp.index.some(ix => ix.baseIndex >= 0 && cmp.years[ix.baseIndex] !== cmp.baseYear)
     ? ' 일부 분야는 해당 연도 건수가 없어 첫 유효 연도를 기준으로 했습니다.' : '';
+  // 분야별 요약 카드 — 그래프보다 먼저 결론(규모·성장 신호)이 보이게 한다
+  const summaryCards = sides.map((side, i) => {
+    const t = side.trend;
+    const tone = INVEST_CMP_PHASE_TONE[t.phase] || INVEST_CMP_PHASE_TONE['판정 불가'];
+    const recent3 = t.counts.slice(-3).reduce((s, v) => s + (v || 0), 0);
+    const recentShare = t.total > 0 ? Math.round(recent3 / t.total * 100) : null;
+    return `
+      <div style="background:#fff;border:1px solid #e4e7ec;border-top:4px solid ${INVEST_CMP_COLORS[i]};border-radius:12px;padding:12px 14px;min-width:0;">
+        <div style="font-size:13px;font-weight:800;color:${INVEST_CMP_COLORS[i]};margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escAttr(side.query)}">● ${escHtml(side.query)}</div>
+        <div style="font-size:18px;font-weight:800;color:${tone.color};line-height:1.2;">${tone.icon} ${escHtml(t.phase)}</div>
+        <div style="font-size:11px;color:#667085;margin:2px 0 10px;">최근 3년 평균, 직전 3년 대비 ${growthText(t.growth)}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <div><div style="font-size:10.5px;color:#98a2b3;">${cmp.years.length}년 총 과제</div><div style="font-size:15px;font-weight:800;color:#1d2939;">${t.total.toLocaleString()}건</div></div>
+          <div><div style="font-size:10.5px;color:#98a2b3;">최근 3년 비중</div><div style="font-size:15px;font-weight:800;color:#1d2939;">${recentShare === null ? '—' : `${recentShare}%`}</div></div>
+        </div>
+        ${t.peakYear ? `<div style="font-size:10.5px;color:#98a2b3;margin-top:6px;">정점 ${t.peakYear}년</div>` : ''}
+      </div>`;
+  }).join('');
+
   const rows = [
     ['최근 5년 과제 건수', k.recentTotal.map(v => `${v.toLocaleString()}건`)],
-    ['성장 단계 (최근3년 vs 직전3년)', k.phase.map((p, i) => `${escHtml(p)} ${growthText(k.growth[i])}`)],
     ['주도 부처', k.topMinistry.map((m, i) => `${escHtml(m || '—')} <span style="color:#98a2b3;">${pctText(k.topMinistryShare[i])}</span>`)],
     ['부처 집중도 (HHI)', k.ministryHHI.map(v => String(v ?? '—'))],
     ['기업 수행 비중', k.companyShare.map(pctText)],
@@ -186,26 +216,30 @@ function renderInvestmentCompare(sides, cmp) {
         </button>
       </div>
       <div class="analysis-body trend-analysis-body">
-        <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;margin-bottom:14px;overflow-x:auto;">
-          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:2px;">핵심 지표 비교</div>
-          <div style="font-size:11.5px;color:#667085;margin-bottom:8px;">규모: ${scaleText}</div>
-          ${kpiTable}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:6px;">
+          ${summaryCards}
         </div>
+        <div style="font-size:11.5px;color:#667085;margin-bottom:14px;">규모: ${scaleText}</div>
 
         <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:16px;margin-bottom:14px;">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px;">
             <div id="investCmpChartTitle" style="font-size:12px;font-weight:700;color:#344054;"></div>
             <div role="group" aria-label="그래프 보기 전환" style="display:inline-flex;border:1px solid #d0d5dd;border-radius:8px;overflow:hidden;">
-              <button type="button" id="investCmpViewCount" onclick="setInvestCmpView('count')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;cursor:pointer;">실제 건수</button>
+              <button type="button" id="investCmpViewCount" onclick="setInvestCmpView('count')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;cursor:pointer;">분야별 건수</button>
               <button type="button" id="investCmpViewIndex" onclick="setInvestCmpView('index')" style="padding:5px 12px;font-size:11.5px;font-weight:700;border:0;border-left:1px solid #d0d5dd;cursor:pointer;">성장 지수</button>
             </div>
           </div>
           <div id="investCmpChartNote" style="font-size:10.5px;color:#98a2b3;margin-bottom:10px;"></div>
-          <div style="position:relative;height:240px;"><canvas id="investCmpChart"></canvas></div>
+          <div id="investCmpChartArea"></div>
+        </div>
+
+        <div style="background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;margin-bottom:14px;overflow-x:auto;">
+          <div style="font-size:12px;font-weight:700;color:#344054;margin-bottom:8px;">세부 지표 비교</div>
+          ${kpiTable}
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:14px;">
-          ${cmp.dims.map(d => investCmpPairPanel(d.title, d.rows, d.key === 'byRegion' ? `수도권 ${k.capitalShare.map(pctText).join(' vs ')}` : '')).join('')}
+          ${cmp.dims.map(d => investCmpPairPanel(d.title, d.rows, d.key === 'byRegion' ? `수도권 ${k.capitalShare.map(pctText).join(' vs ')}` : '', names)).join('')}
         </div>
 
         <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:12px 16px;border-radius:0 8px 8px 0;margin-bottom:14px;">
@@ -233,7 +267,7 @@ function renderInvestmentCompare(sides, cmp) {
   requestAnimationFrame(drawInvestCmpChart);
 }
 
-// 그래프 보기 전환: 'count'(실제 건수, 로그 눈금 — 규모 순서가 보임) / 'index'(성장 지수 — 성장 속도만 비교)
+// 그래프 보기 전환: 'count'(분야별 작은 막대그래프, 각자 실제 건수 눈금) / 'index'(성장 지수 — 한 그래프에 겹쳐 성장 속도 비교)
 let _investCmpView = 'count';
 let _investCmpData = null;
 
@@ -243,8 +277,7 @@ function setInvestCmpView(view) {
 }
 
 function drawInvestCmpChart() {
-  const ctx = document.getElementById('investCmpChart');
-  if (!ctx || !_investCmpData || typeof Chart === 'undefined') return;
+  if (!_investCmpData || typeof Chart === 'undefined') return;
   const { sides, cmp, fallbackNote } = _investCmpData;
   const isCount = _investCmpView === 'count';
 
@@ -255,23 +288,65 @@ function drawInvestCmpChart() {
   setBtn('investCmpViewIndex', !isCount);
   const title = document.getElementById('investCmpChartTitle');
   const note = document.getElementById('investCmpChartNote');
-  if (title) title.textContent = isCount ? '과제 건수 비교 (실제 건수, 로그 눈금)' : `성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
+  if (title) title.textContent = isCount ? '연도별 과제 건수 (분야별 실제 건수)' : `성장 추세 비교 (지수: ${cmp.baseYear}년 = 100)`;
   if (note) note.textContent = isCount
-    ? '규모가 서로 달라도 모두 보이도록 세로축을 로그 눈금(10·100·1,000…)으로 그렸습니다. 선이 위에 있을수록 건수가 많고, 기울기가 가파를수록 빠르게 늘고 있습니다.'
+    ? '분야마다 따로 그려 각자의 추세 모양이 보이도록 했습니다. 세로축 눈금은 분야마다 다르니 규모는 위 카드의 건수로 비교하세요. 진한 막대가 정점 연도입니다.'
     : `규모가 아니라 ${cmp.baseYear}년 대비 증가 배수입니다(100 초과 = ${cmp.baseYear}년보다 증가). 건수가 많은 분야가 아래에 있을 수 있습니다. 실제 건수는 마우스를 올리면 표시됩니다.${fallbackNote}`;
 
-  if (window._investCmpChartInstance) window._investCmpChartInstance.destroy();
+  const area = document.getElementById('investCmpChartArea');
+  if (!area) return;
+  (window._investCmpChartInstances || []).forEach(c => c.destroy());
+  window._investCmpChartInstances = [];
+  const labels = cmp.years.map(String);
+  const rawText = raw => (raw === null || raw === undefined ? '조회 실패' : `${Number(raw).toLocaleString()}건`);
+  const grid = { color: 'rgba(52,64,84,0.08)' };
+
+  if (isCount) {
+    // 분야별 작은 막대그래프 — 각자 실제 건수 눈금, 정점 연도는 진하게
+    area.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">
+      ${sides.map((side, i) => `
+        <div style="min-width:0;">
+          <div style="font-size:12px;font-weight:700;color:${INVEST_CMP_COLORS[i]};margin-bottom:4px;">● ${escHtml(side.query)}</div>
+          <div style="position:relative;height:200px;"><canvas id="investCmpChart${i}"></canvas></div>
+        </div>`).join('')}
+    </div>`;
+    sides.forEach((side, i) => {
+      const canvas = document.getElementById(`investCmpChart${i}`);
+      if (!canvas) return;
+      const color = INVEST_CMP_COLORS[i];
+      const peak = String(side.trend.peakYear);
+      window._investCmpChartInstances.push(new Chart(canvas, {
+        type: 'bar',
+        data: { labels, datasets: [{
+          label: side.query,
+          data: side.trend.counts.map(v => (Number.isFinite(v) ? v : null)),
+          backgroundColor: labels.map(y => (y === peak ? color : `${color}8C`)),
+          borderRadius: 3, maxBarThickness: 32,
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${rawText(c.raw)}` } } },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: '#667085', maxRotation: 0, autoSkip: true, autoSkipPadding: 6 } },
+            y: { beginAtZero: true, grid, ticks: { color: '#667085', callback: v => Number(v).toLocaleString() } },
+          },
+        },
+      }));
+    });
+    return;
+  }
+
+  area.innerHTML = '<div style="position:relative;height:240px;"><canvas id="investCmpChartIndex"></canvas></div>';
   const datasets = sides.map((side, i) => ({
     label: side.query,
-    // 로그 눈금은 0 이하를 그릴 수 없으므로 0건은 빈 값으로 둔다
-    data: isCount ? side.trend.counts.map(v => (Number.isFinite(v) && v > 0 ? v : null)) : cmp.index[i].values,
+    data: cmp.index[i].values,
     rawCounts: side.trend.counts,
     borderColor: INVEST_CMP_COLORS[i], backgroundColor: INVEST_CMP_COLORS[i],
-    borderWidth: 2.5, pointRadius: 3, tension: isCount ? 0.15 : 0.25, spanGaps: false,
+    borderWidth: 2.5, pointRadius: 3, tension: 0.25, spanGaps: false,
   }));
-  window._investCmpChartInstance = new Chart(ctx, {
+  window._investCmpChartInstances.push(new Chart(document.getElementById('investCmpChartIndex'), {
     type: 'line',
-    data: { labels: cmp.years.map(String), datasets },
+    data: { labels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
@@ -279,19 +354,15 @@ function drawInvestCmpChart() {
         legend: { position: 'bottom', labels: { usePointStyle: true, color: '#475467' } },
         tooltip: { callbacks: { label: c => {
           const raw = c.dataset.rawCounts[c.dataIndex];
-          const rawText = raw === null || raw === undefined ? '조회 실패' : `${Number(raw).toLocaleString()}건`;
-          return isCount ? `${c.dataset.label}: ${rawText}`
-            : `${c.dataset.label}: 지수 ${c.raw === null ? '—' : c.raw}${raw === null || raw === undefined ? '' : ` (${rawText})`}`;
+          return `${c.dataset.label}: 지수 ${c.raw === null ? '—' : c.raw}${raw === null || raw === undefined ? '' : ` (${rawText(raw)})`}`;
         } } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: '#667085' } },
-        y: isCount
-          ? { type: 'logarithmic', min: 1, grid: { color: 'rgba(52,64,84,0.08)' }, ticks: { color: '#667085', callback: v => ([1, 10, 100, 1000, 10000, 100000].includes(Number(v)) ? Number(v).toLocaleString() : '') } }
-          : { beginAtZero: true, grid: { color: 'rgba(52,64,84,0.08)' }, ticks: { color: '#667085' } },
+        y: { beginAtZero: true, grid, ticks: { color: '#667085' } },
       },
     },
-  });
+  }));
 }
 
 // ── AI 비교 시사점 (선택) ────────────────────────────────────────
