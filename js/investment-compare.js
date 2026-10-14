@@ -1,5 +1,5 @@
 // ============================================================
-// 정부 R&D 투자 지형 비교 — 키워드 2개를 각각 분석(collectInvestmentData)한 뒤 나란히 비교한다.
+// 정부 R&D 투자 비교 — 키워드 2개를 각각 분석(collectInvestmentData)한 뒤 나란히 비교한다.
 // 분야별 요약 카드 → A 꺾은선·B 막대 복합 그래프(축 2개, 건수/연구비) 순으로 보여주고, 성장 속도는 지수(기준연도=100)로 겹쳐 본다.
 // 비교 계산은 InvestmentCore.compareInvestment, 여기는 입력창과 화면.
 // ============================================================
@@ -29,7 +29,7 @@ function openInvestmentCompare() {
       <input id="investCmp${INVEST_CMP_LABELS[i]}" type="text" value="${escAttr(value)}" placeholder="${placeholder}" style="${inputStyle}margin:4px 0 12px;">`;
   overlay.innerHTML = `
     <div role="dialog" aria-modal="true" aria-labelledby="investCmpTitle" style="background:#fff;border-radius:14px;padding:22px 24px;width:100%;max-width:420px;box-shadow:0 20px 50px rgba(0,0,0,0.25);">
-      <p id="investCmpTitle" style="font-size:15px;font-weight:800;color:#111;margin:0 0 4px;">R&amp;D 투자 지형 비교</p>
+      <p id="investCmpTitle" style="font-size:15px;font-weight:800;color:#111;margin:0 0 4px;">R&amp;D 투자 비교</p>
       <p style="font-size:12px;color:#6b7280;margin:0 0 14px;">기술 키워드 2개를 입력하면 규모·성장·투자 구조를 나란히 비교합니다.</p>
       ${field(0, first, '예: 인공지능')}
       ${field(1, '', '예: 재난안전')}
@@ -85,7 +85,7 @@ async function runInvestmentCompare(queries) {
       <div class="analysis-header flex items-center gap-3">
         <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="20"></iconify-icon>
         <div>
-          <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 지형 비교 (${queries.length}개 분야)</p>
+          <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 비교 (${queries.length}개 분야)</p>
           <p style="font-size:15px;font-weight:700;margin:0">${title}</p>
         </div>
       </div>
@@ -109,7 +109,7 @@ async function runInvestmentCompare(queries) {
   } catch (err) {
     if (isStale()) return;
     console.error('[InvestmentCompare]', err);
-    section.innerHTML = `<div class="analysis-card trend-analysis-card trend-analysis-error fade-up">투자 지형 비교 중 오류가 발생했습니다: ${escHtml(err.message)}</div>`;
+    section.innerHTML = `<div class="analysis-card trend-analysis-card trend-analysis-error fade-up">투자 비교 중 오류가 발생했습니다: ${escHtml(err.message)}</div>`;
   }
 }
 
@@ -237,7 +237,7 @@ function renderInvestmentCompare(sides, cmp) {
         <div class="flex items-center gap-3">
           <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="20"></iconify-icon>
           <div>
-            <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 지형 비교 — 과제 건수·연구비 ${cmp.years[0]}~${cmp.years[cmp.years.length - 1]} · 투자 구조 ${recentFrom}~${lastYear}</p>
+            <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 비교 — 과제 건수·연구비 ${cmp.years[0]}~${cmp.years[cmp.years.length - 1]} · 투자 구조 ${recentFrom}~${lastYear}</p>
             <p style="font-size:15px;font-weight:700;margin:0">${headerTitle}</p>
           </div>
         </div>

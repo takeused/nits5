@@ -1,5 +1,5 @@
 // ============================================================
-// 정부 R&D 투자 지형 분석 — NTIS 과제 데이터로 "어디에·얼마를·누구에게" 투자하는지 본다.
+// 정부 R&D 투자 현황 분석 — NTIS 과제 데이터로 "어디에·얼마를·누구에게" 투자하는지 본다.
 // 집계·판정 로직은 js/investment-core.js(InvestmentCore), 여기는 수집과 화면.
 //   ① 연도별 과제 건수: 연도 필터(addQuery PY)로 연도마다 조회 → 정확한 전체 건수
 //   ② 연도별 정부연구비(최근 6년): 과제가 적으면 전수 합산, 많으면 연도당 표본 평균 × 전체 건수로 추정
@@ -70,7 +70,7 @@ function investSetProgress(msg) {
   if (el) el.textContent = msg;
 }
 
-// 키워드 1개의 투자 지형 데이터를 수집·집계한다. 같은 검색어는 30분간 캐시(비교 분석 재사용).
+// 키워드 1개의 투자 현황 데이터를 수집·집계한다. 같은 검색어는 30분간 캐시(비교 분석 재사용).
 // isStale()이 true가 되면(새 분석이 시작되면) null을 돌려 중단한다.
 const _investCache = new Map();
 const INVEST_CACHE_TTL = 30 * 60 * 1000;
@@ -232,7 +232,7 @@ async function runInvestmentAnalysis() {
       <div class="analysis-header flex items-center gap-3">
         <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="20"></iconify-icon>
         <div>
-          <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 지형 분석 — NTIS 국가R&amp;D 과제</p>
+          <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 현황 분석 — NTIS 국가R&amp;D 과제</p>
           <p style="font-size:15px;font-weight:700;margin:0">"${escHtml(query)}"</p>
         </div>
       </div>
@@ -250,7 +250,7 @@ async function runInvestmentAnalysis() {
   } catch (err) {
     if (runSeq !== _investRunSeq) return;
     console.error('[Investment]', err);
-    section.innerHTML = `<div class="analysis-card trend-analysis-card trend-analysis-error fade-up">투자 지형 분석 중 오류가 발생했습니다: ${escHtml(err.message)}</div>`;
+    section.innerHTML = `<div class="analysis-card trend-analysis-card trend-analysis-error fade-up">투자 현황 분석 중 오류가 발생했습니다: ${escHtml(err.message)}</div>`;
   }
 }
 
@@ -370,7 +370,7 @@ function renderInvestmentDashboard(meta, agg, trend, insights) {
         <div class="flex items-center gap-3">
           <iconify-icon icon="solar:pie-chart-2-bold-duotone" width="20"></iconify-icon>
           <div>
-            <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 지형 분석 — 과제 건수 ${years[0]}~${years[years.length - 1]} · 투자 구조 ${recentFrom}~${lastYear}</p>
+            <p style="font-size:11px;opacity:0.6;margin:0 0 2px 0">정부 R&amp;D 투자 현황 분석 — 과제 건수 ${years[0]}~${years[years.length - 1]} · 투자 구조 ${recentFrom}~${lastYear}</p>
             <p style="font-size:15px;font-weight:700;margin:0">"${escHtml(query)}"</p>
           </div>
         </div>
@@ -424,7 +424,7 @@ function renderInvestmentDashboard(meta, agg, trend, insights) {
         <div style="font-size:11px;color:#98a2b3;margin-bottom:10px;">${escHtml(sampleNote)}${failedPages ? ` · 수집 실패 ${failedPages}페이지 제외` : ''}</div>
 
         <details style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;">
-          <summary style="font-size:12px;font-weight:700;color:#475569;cursor:pointer;list-style:none;">📐 투자 지형 분석은 이렇게 산출됩니다</summary>
+          <summary style="font-size:12px;font-weight:700;color:#475569;cursor:pointer;list-style:none;">📐 투자 현황 분석은 이렇게 산출됩니다</summary>
           <div style="margin-top:12px;font-size:12px;color:#475569;line-height:1.75;">
             <ol style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:7px;">
               <li><strong>연도별 과제 건수</strong> — NTIS 과제검색에 연도 필터(PY)를 걸어 연도마다 <strong>전체 건수</strong>를 조회합니다(표본 아님). NTIS는 과제를 <strong>연차·수행기관 단위 레코드</strong>로 집계하므로, 다년·공동 과제는 여러 건으로 셉니다.</li>

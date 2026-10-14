@@ -5,7 +5,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  // ── 정부 R&D 투자 지형 분석 — 집계·판정 로직 (DOM 비의존, 테스트 가능) ──
+  // ── 정부 R&D 투자 현황 분석 — 집계·판정 로직 (DOM 비의존, 테스트 가능) ──
   // 입력 레코드는 NTIS 과제검색 HIT 1건 = "수행기관 × 연도" 1건이다(실측).
   // 따라서 정부연구비를 레코드 단위로 합산해도 이중합산이 아니다.
 
